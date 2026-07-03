@@ -9,6 +9,7 @@
 // ============================================================
 import { createAdminClient } from "@/lib/supabase/admin";
 import { heuristicScan } from "@/lib/moderation/categories";
+import { moderate } from "@/lib/moderation";
 import { chatComplete } from "@/lib/atlas/llm";
 import type {
   PersonaCanon,
@@ -237,7 +238,7 @@ async function summarizeBatch(prevSummary: string, msgs: CharacterMemory[] | { r
 
 // 윈도우 밖으로 밀려난 메시지를 요약에 통합. chat 라우트가 매 턴 후 호출(대개 즉시 early-return).
 // 절대 throw하지 않는다 — 요약 실패가 채팅 응답을 깨지 않도록.
-export async function maybeSummarize(sessionId: string): Promise<void> {
+export async function maybeSummarize(sessionId: string, userId: string | null = null): Promise<void> {
   try {
     const admin = createAdminClient();
     const { data: sess } = await admin
@@ -265,8 +266,11 @@ export async function maybeSummarize(sessionId: string): Promise<void> {
     if (!msgs?.length) return;
 
     const updated = await summarizeBatch(sess?.rolling_summary ?? "", msgs as any);
-    // 안전 백스톱: 미성년/불법 흔적이 요약에 박히면 저장 거부(기존 요약 유지, 워터마크 미갱신).
-    if (!updated || !updated.trim() || heuristicScan(updated)) return;
+    if (!updated || !updated.trim()) return;
+    // 요약은 LLM 생성물이며 다음 프롬프트로 재주입되므로, 단일 진입점 moderate()를 통과시킨다
+    // (heuristicScan 백스톱 + 외부 분류기 + moderation_logs 감사). 실패 시 저장 거부(기존 요약 유지).
+    const mod = await moderate({ userId, channel: "chat_out", text: updated });
+    if (!mod.pass) return;
 
     await admin
       .from("sessions")

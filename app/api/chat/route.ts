@@ -82,6 +82,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
     }
 
+    // 일관성 검사는 캐논(정체성/나이/불변사실/말투)만 검증한다. 롤링 요약과의 모순은
+    // 검사하지 않음 — 자유텍스트 요약의 휴리스틱 모순 감지는 오탐(불필요 재생성) 위험이 커서
+    // 의도적으로 제외(알려진 한계). 요약은 프롬프트로만 주입돼 모델의 자발적 연속성에 의존.
     const cons = checkConsistency(canonRef.canon, draft);
     if (cons.ok) {
       reply = draft;
@@ -121,7 +124,7 @@ export async function POST(req: Request) {
   if (facts.length) await recordCharacterMemory(sessionId, gate.userId, facts);
 
   // 7) 롤링 요약 갱신(윈도우 초과 시에만 LLM 호출, best-effort — 실패해도 응답 무손상).
-  await maybeSummarize(sessionId);
+  await maybeSummarize(sessionId, gate.userId);
 
   return NextResponse.json({ reply });
 }
