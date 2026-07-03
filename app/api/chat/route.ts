@@ -14,6 +14,8 @@ import {
   checkConsistency,
   recordCharacterMemory,
   extractDurableFacts,
+  maybeSummarize,
+  RECENT_WINDOW,
 } from "@/lib/persona/core";
 
 export async function POST(req: Request) {
@@ -50,16 +52,19 @@ export async function POST(req: Request) {
   if (!systemPrompt || !canonRef)
     return NextResponse.json({ error: "persona_unavailable" }, { status: 500 });
 
-  const { data: history } = await admin
+  // 최근 윈도우만 원문 전송(그 이전은 롤링 요약이 systemPrompt에 이미 반영됨).
+  // desc + limit 후 reverse → "가장 최근 N개"를 시간순으로.
+  const { data: recent } = await admin
     .from("messages")
     .select("role, content")
     .eq("session_id", sessionId)
-    .order("created_at", { ascending: true })
-    .limit(40);
+    .order("created_at", { ascending: false })
+    .limit(RECENT_WINDOW);
+  const history = ((recent ?? []) as ChatMessage[]).reverse();
 
   const baseContext: ChatMessage[] = [
     { role: "system", content: systemPrompt },
-    ...((history ?? []) as ChatMessage[]),
+    ...history,
     { role: "user", content: message },
   ];
 
@@ -114,6 +119,9 @@ export async function POST(req: Request) {
   // 6) 연속성 기억 추출·기록(입력 moderation 통과분에서 파생, 저장 전 재검사).
   const facts = extractDurableFacts(message);
   if (facts.length) await recordCharacterMemory(sessionId, gate.userId, facts);
+
+  // 7) 롤링 요약 갱신(윈도우 초과 시에만 LLM 호출, best-effort — 실패해도 응답 무손상).
+  await maybeSummarize(sessionId);
 
   return NextResponse.json({ reply });
 }
