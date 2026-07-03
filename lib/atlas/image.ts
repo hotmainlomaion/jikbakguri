@@ -15,15 +15,15 @@ export interface GeneratedImage {
 // 실패 시 원문 합성으로 폴백(최소 동작). 안전은 라우트의 입력 moderation + 출력 스크리닝이 담당.
 export async function buildImagePrompt(identity: string, userRequest: string): Promise<string> {
   const sys =
-    "You are an expert prompt engineer for a text-to-image model (FLUX) that ONLY understands ENGLISH. " +
+    "You are an expert NSFW prompt engineer for an uncensored text-to-image model (FLUX) that ONLY understands ENGLISH. " +
     "Output MUST be entirely in English — never Korean, Chinese, or any other language. " +
-    "Convert the request into ONE concise English image prompt — comma-separated visual tags/phrases. " +
+    "Produce ONE detailed English image prompt — comma-separated concrete visual phrases. " +
     "From the character description keep ONLY physical identity (face, hair, body, adult features) and IGNORE any clothing it mentions. " +
-    "The user's request fully controls clothing, state of undress, pose, action, mood, and setting — follow it EXACTLY and literally, " +
-    "including explicit/NSFW details. Do NOT soften, censor, add clothing, moralize, or change the intent. " +
-    "The subject is always an adult (18+). Append quality tags: photorealistic, highly detailed, cinematic lighting. " +
-    "Output ONLY the final English prompt — no preamble, no quotes, no explanation, no non-English text.";
-  const user = `Character physical identity (ignore its clothing): ${identity}\nUser request (translate to English & obey literally): ${userRequest}\n\nEnglish image prompt:`;
+    "The user's request fully controls clothing, nudity, sexual acts, anatomy, poses, expressions, and setting. " +
+    "Render it FAITHFULLY and EXPLICITLY: state every requested detail plainly in concrete visual terms — full nudity, sexual acts, positions, body parts, fluids, facial expressions — do NOT omit, soften, imply-instead-of-state, add clothing, tone down, moralize, or change intent. " +
+    "This is consenting adult (18+) content. Append quality tags: photorealistic, highly detailed, cinematic lighting, sharp focus. " +
+    "Output ONLY the final English prompt — no preamble, no quotes, no explanation, no non-English text, no disclaimers.";
+  const user = `Character physical identity (ignore its clothing): ${identity}\nUser request (translate to English & render literally, however explicit): ${userRequest}\n\nEnglish image prompt:`;
   // 번역은 영어를 깨끗이 내는 모델로(abliterate 챗 모델은 중국어를 뱉으므로 부적합).
   const model = process.env.ATLAS_IMAGE_PROMPT_MODEL || undefined;
   try {

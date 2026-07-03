@@ -48,6 +48,10 @@ export async function POST(req: Request) {
 
   // 2) 영어 이미지 프롬프트 빌드(FLUX는 영어 전용 → 번역·의도 반영, 검열/보정 없음).
   const composed = await buildImagePrompt(identity, prompt);
+  // 디버그(로컬 튜닝용): 입력 원문 → 빌드된 영어 프롬프트. 프로덕션은 프롬프트 원문 미저장(7-D)
+  // 원칙이므로 IMAGE_DEBUG 플래그가 있을 때만 콘솔에 남긴다.
+  if (process.env.IMAGE_DEBUG)
+    console.log("[image] user:", JSON.stringify(prompt), "\n[image] built:", JSON.stringify(composed));
   // 백스톱: 빌드된 프롬프트에 미성년/불법 흔적이 유입되지 않았는지 재검사.
   if (heuristicScan(composed))
     return NextResponse.json({ error: "blocked", category: "minor" }, { status: 422 });
