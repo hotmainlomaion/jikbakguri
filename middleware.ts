@@ -12,10 +12,25 @@ function isPublic(path: string) {
 
 export async function middleware(req: NextRequest) {
   let res = NextResponse.next({ request: req });
+  const path = req.nextUrl.pathname;
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  // env 미설정(예: 시크릿 없는 데모 코드스페이스): 인증 불가 → fail-closed.
+  // 공개 페이지(랜딩/로그인)만 렌더, 보호 라우트는 로그인으로 리다이렉트. 보안 약화 아님.
+  if (!url || !anon) {
+    if (!isPublic(path) && !path.startsWith("/api")) {
+      const u = req.nextUrl.clone();
+      u.pathname = "/login";
+      return NextResponse.redirect(u);
+    }
+    return res;
+  }
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    url,
+    anon,
     {
       cookies: {
         getAll() {
@@ -34,13 +49,11 @@ export async function middleware(req: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const path = req.nextUrl.pathname;
-
   // 미로그인 사용자가 보호 페이지 접근 → 로그인으로.
   if (!user && !isPublic(path) && !path.startsWith("/api")) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
+    const dest = req.nextUrl.clone();
+    dest.pathname = "/login";
+    return NextResponse.redirect(dest);
   }
 
   return res;
