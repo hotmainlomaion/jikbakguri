@@ -68,7 +68,8 @@ async function classifyImage(imageUrl: string): Promise<ModerationResult> {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
       body: JSON.stringify({ image_url: imageUrl }),
-      signal: AbortSignal.timeout(15000),
+      // 로컬 비전모델(llava)은 콜드 로드가 느려 15s로는 부족 → fail-closed 오차단 방지.
+      signal: AbortSignal.timeout(Number(process.env.MODERATION_IMAGE_TIMEOUT_MS ?? 120000)),
     });
     if (!resp.ok) throw new Error(`image moderation api ${resp.status}`);
     const data = await resp.json();
