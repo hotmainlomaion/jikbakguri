@@ -13,14 +13,29 @@ export type ProfileBot = {
   likes: number;
   bedroom: number;
   living: number;
+  avatarUrl?: string | null;
 };
 
-export function ProfileImage({ name, className = "" }: { name: string; className?: string }) {
+// imageUrl 있으면 실제 대표컷, 없으면 gradientFor 폴백(회귀 0).
+export function ProfileImage({
+  name,
+  className = "",
+  imageUrl,
+}: {
+  name: string;
+  className?: string;
+  imageUrl?: string | null;
+}) {
   return (
     <div className={"relative overflow-hidden " + className} style={{ background: gradientFor(name) }}>
-      <span className="absolute inset-0 flex items-center justify-center text-[96px] font-black text-white/12">
-        {name.slice(0, 1)}
-      </span>
+      {imageUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={imageUrl} alt={name} className="absolute inset-0 h-full w-full object-cover" />
+      ) : (
+        <span className="absolute inset-0 flex items-center justify-center text-[96px] font-black text-white/12">
+          {name.slice(0, 1)}
+        </span>
+      )}
       <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-bg2 to-transparent" />
     </div>
   );

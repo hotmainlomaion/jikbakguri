@@ -11,6 +11,7 @@ export type CardBot = {
   comments: number;
   isNew: boolean;
   scenarioCount: number;
+  avatarUrl?: string | null;
 };
 
 export function CharacterCard({
@@ -37,9 +38,14 @@ export function CharacterCard({
             #{bot.tags[0]}
           </span>
         )}
-        <span className="absolute inset-0 flex items-center justify-center text-6xl font-black text-white/15">
-          {bot.name.slice(0, 1)}
-        </span>
+        {bot.avatarUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={bot.avatarUrl} alt={bot.name} className="absolute inset-0 h-full w-full object-cover" />
+        ) : (
+          <span className="absolute inset-0 flex items-center justify-center text-6xl font-black text-white/15">
+            {bot.name.slice(0, 1)}
+          </span>
+        )}
         <span className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black/80 to-transparent" />
         <div className="absolute inset-x-0 bottom-0 p-3">
           <h3 className="truncate text-[15px] font-bold text-white">{bot.name}</h3>

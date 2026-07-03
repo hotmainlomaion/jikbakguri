@@ -3,6 +3,7 @@ import { redirect, notFound } from "next/navigation";
 import { requireVerifiedUser } from "@/lib/auth/gate";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { mockStats } from "@/components/ui";
+import { getProfileMedia } from "@/lib/images/serve";
 import { ChatUI } from "./chat-ui";
 
 export default async function ChatPage({ params }: { params: { sessionId: string } }) {
@@ -39,6 +40,9 @@ export default async function ChatPage({ params }: { params: { sessionId: string
   const st = mockStats(session.bot_profile_id);
   const scenario = (session.scenario_snapshot as any) ?? null;
 
+  // 실제 대표컷 + 컬렉션 개수(등록 이미지 없으면 폴백/0).
+  const media = await getProfileMedia(session.bot_profile_id);
+
   return (
     <ChatUI
       sessionId={params.sessionId}
@@ -50,8 +54,9 @@ export default async function ChatPage({ params }: { params: { sessionId: string
         views: st.views,
         comments: st.comments,
         likes: st.likes,
-        bedroom: st.bedroom,
-        living: st.living,
+        bedroom: media.collectionCounts["침실"] ?? 0,
+        living: media.collectionCounts["거실"] ?? 0,
+        avatarUrl: media.avatarUrl,
       }}
       scenarioTitle={scenario?.title ?? null}
       initial={(messages ?? []) as any}

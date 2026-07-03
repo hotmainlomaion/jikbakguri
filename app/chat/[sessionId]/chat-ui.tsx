@@ -394,7 +394,7 @@ function HistoryPanel({ history, active }: { history: Hist[]; active: string }) 
 function ProfilePanel({ bot, onReport }: { bot: Bot; onReport: () => void }) {
   return (
     <aside className="hidden w-80 shrink-0 flex-col overflow-y-auto border-l border-line bg-bg2 lg:flex">
-      <ProfileImage name={bot.name} className="aspect-[4/5]" />
+      <ProfileImage name={bot.name} imageUrl={bot.avatarUrl} className="aspect-[4/5]" />
       <div className="px-5 pb-8">
         <ProfileDetails bot={bot} onReport={onReport} />
       </div>

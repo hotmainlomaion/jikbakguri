@@ -181,6 +181,10 @@ function Hero({ bots, onSelect }: { bots: GalleryBot[]; onSelect: (b: CardBot) =
   const b = bots[i % bots.length];
   return (
     <div className="relative mt-5 h-40 overflow-hidden rounded-2xl sm:h-64" style={{ background: gradientFor(b.name) }}>
+      {b.avatarUrl && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={b.avatarUrl} alt={b.name} className="absolute inset-0 h-full w-full object-cover" />
+      )}
       <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/30 to-transparent" />
       <button onClick={() => onSelect(b)} className="absolute inset-0 flex flex-col justify-end p-4 text-left sm:p-8">
         <div className="mb-2 flex gap-2">

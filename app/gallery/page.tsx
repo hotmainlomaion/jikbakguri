@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { requireVerifiedUser } from "@/lib/auth/gate";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { mockStats } from "@/components/ui";
+import { signAvatars } from "@/lib/images/serve";
 import { GalleryClient, type GalleryBot } from "./gallery-client";
 
 export default async function GalleryPage() {
@@ -33,6 +34,8 @@ export default async function GalleryPage() {
     scByBot.set(s.bot_profile_id, arr);
   }
 
+  const avatars = await signAvatars((bots ?? []).map((b: any) => b.id));
+
   const data: GalleryBot[] = (bots ?? []).map((b: any) => {
     const st = mockStats(b.id);
     return {
@@ -48,6 +51,7 @@ export default async function GalleryPage() {
       rankScore: st.rankScore,
       scenarioCount: (scByBot.get(b.id) ?? []).length,
       scenarios: scByBot.get(b.id) ?? [],
+      avatarUrl: avatars.get(b.id) ?? null,
     };
   });
 

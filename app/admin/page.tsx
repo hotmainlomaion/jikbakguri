@@ -1,64 +1,76 @@
-// A1. 운영자 콘솔 — 봇 CRUD, 모더레이션 로그, 신고 처리, 사용자 제재.
+// A1. 운영자 콘솔 홈 — 캐릭터 목록(상세 링크) + 신고/사용자/모더레이션 로그.
+// 프로필/스토리라인/이미지 편집은 /admin/bots/[id] 상세에서 구분 관리.
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/gate";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { BotForm, PublishToggle, ReportActions, UserActions, ScenarioForm, ScenarioToggle } from "./admin-ui";
+import { signAvatars } from "@/lib/images/serve";
+import { Avatar as GradAvatar } from "@/components/ui";
+import { BotForm, PublishToggle, ReportActions, UserActions } from "./admin-ui";
 
 export default async function AdminPage() {
   const gate = await requireAdmin();
   if (!gate.ok) redirect("/login");
 
   const admin = createAdminClient();
-  const [{ data: bots }, { data: scenarios }, { data: logs }, { data: reports }, { data: users }] =
+  const [{ data: bots }, { data: scenarios }, { data: imgs }, { data: logs }, { data: reports }, { data: users }] =
     await Promise.all([
       admin.from("bot_profiles").select("*").order("created_at"),
-      admin.from("scenarios").select("id, bot_profile_id, title, is_published").order("created_at"),
+      admin.from("scenarios").select("bot_profile_id").order("created_at"),
+      admin.from("character_images").select("bot_profile_id, review_status"),
       admin.from("moderation_logs").select("*").order("created_at", { ascending: false }).limit(50),
       admin.from("reports").select("*").order("created_at", { ascending: false }).limit(50),
       admin.from("users").select("id, email, status, is_adult_verified").limit(100),
     ]);
 
-  const scByBot = new Map<string, any[]>();
-  for (const s of scenarios ?? []) {
-    const arr = scByBot.get(s.bot_profile_id) ?? [];
-    arr.push(s);
-    scByBot.set(s.bot_profile_id, arr);
+  const botIds = (bots ?? []).map((b: any) => b.id);
+  const avatars = await signAvatars(botIds);
+
+  const scCount = new Map<string, number>();
+  for (const s of scenarios ?? []) scCount.set(s.bot_profile_id, (scCount.get(s.bot_profile_id) ?? 0) + 1);
+  const imgCount = new Map<string, { total: number; approved: number }>();
+  for (const i of imgs ?? []) {
+    const c = imgCount.get(i.bot_profile_id) ?? { total: 0, approved: 0 };
+    c.total++;
+    if (i.review_status === "approved") c.approved++;
+    imgCount.set(i.bot_profile_id, c);
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-8">
+    <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
       <h1 className="mb-6 text-2xl font-semibold">운영자 콘솔</h1>
 
       <section className="mb-10">
-        <h2 className="mb-3 text-lg font-medium">봇 프로필</h2>
-        <BotForm />
-        <div className="mt-4 space-y-2">
-          {(bots ?? []).map((b: any) => (
-            <div key={b.id} className="rounded-lg border border-border bg-surface px-4 py-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="font-medium">{b.name}</span>{" "}
-                  <span className="text-xs text-muted">
-                    · {b.character_age}세 · {b.is_published ? "공개" : "비공개"}
-                    {b.tags?.length ? ` · ${b.tags.map((t: string) => "#" + t).join(" ")}` : ""}
-                  </span>
-                </div>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-medium">캐릭터</h2>
+          <BotForm />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {(bots ?? []).map((b: any) => {
+            const url = avatars.get(b.id);
+            const ic = imgCount.get(b.id) ?? { total: 0, approved: 0 };
+            return (
+              <div key={b.id} className="flex items-center gap-3 rounded-xl border border-border bg-surface p-3">
+                {url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={url} alt="" className="h-14 w-14 shrink-0 rounded-lg object-cover" />
+                ) : (
+                  <GradAvatar name={b.name} size={56} rounded="rounded-lg" />
+                )}
+                <Link href={`/admin/bots/${b.id}`} className="min-w-0 flex-1">
+                  <div className="font-medium hover:text-primary">{b.name}</div>
+                  <div className="text-xs text-muted">
+                    {b.character_age}세 · {b.is_published ? "공개" : "비공개"} · 시나리오 {scCount.get(b.id) ?? 0} · 이미지 {ic.approved}/{ic.total}
+                  </div>
+                  {b.tags?.length ? (
+                    <div className="mt-0.5 truncate text-[11px] text-primary">{b.tags.map((t: string) => "#" + t).join(" ")}</div>
+                  ) : null}
+                </Link>
                 <PublishToggle id={b.id} published={b.is_published} />
               </div>
-              {/* 시나리오 */}
-              <div className="mt-2 space-y-1 border-t border-border pt-2">
-                {(scByBot.get(b.id) ?? []).map((s: any) => (
-                  <div key={s.id} className="flex items-center justify-between text-sm">
-                    <span className="text-muted">
-                      {s.title} <span className="text-xs">· {s.is_published ? "공개" : "비공개"}</span>
-                    </span>
-                    <ScenarioToggle id={s.id} published={s.is_published} />
-                  </div>
-                ))}
-                <ScenarioForm botId={b.id} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
+          {(!bots || bots.length === 0) && <p className="text-muted">캐릭터가 없습니다.</p>}
         </div>
       </section>
 

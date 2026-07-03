@@ -3,6 +3,19 @@
 import { describe, it, expect } from "vitest";
 import { heuristicScan } from "./categories";
 
+// 업로드 파일명 라벨 정규화 회귀(적대 리뷰 CONFIRMED): '_'/'.'/'-' 로 단어가 붙어
+// \b 경계를 회피하는 경우(child_teen.png)를 정규화 후 차단해야 함(app/api/admin/images).
+describe("heuristicScan — 파일명 구분자 정규화", () => {
+  const norm = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, " ");
+  it("child_teen.png → 정규화 후 차단", () => {
+    expect(heuristicScan("child_teen.png")).toBeNull(); // 정규화 전에는 회피됨(버그 재현)
+    expect(heuristicScan(norm("child_teen.png"))).toBe("minor"); // 정규화 후 차단
+  });
+  it("정상 파일명은 통과", () => {
+    expect(heuristicScan(norm("yuna_avatar_01.png"))).toBeNull();
+  });
+});
+
 describe("heuristicScan — 미성년 차단 (7-B 최우선)", () => {
   const minorInputs = [
     "a child on the beach",

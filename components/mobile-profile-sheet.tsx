@@ -16,7 +16,7 @@ export function MobileProfileSheet({
 }) {
   return (
     <BottomSheet open={open} onClose={onClose}>
-      <ProfileImage name={bot.name} className="-mx-4 -mt-4 mb-2 h-40 rounded-t-2xl sm:-mx-5 sm:-mt-5" />
+      <ProfileImage name={bot.name} imageUrl={bot.avatarUrl} className="-mx-4 -mt-4 mb-2 h-40 rounded-t-2xl sm:-mx-5 sm:-mt-5" />
       <ProfileDetails bot={bot} onReport={onReport} />
     </BottomSheet>
   );
