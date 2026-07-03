@@ -1,7 +1,8 @@
-// S4. 봇 갤러리 — 태그 필터 + 캐릭터 카드(대표컷 플레이스홀더) → 시나리오 선택 → 채팅.
+// S4. 홈/갤러리 — TopToon Chat 스타일. 서버 게이트 + 데이터 로드 후 클라이언트 렌더.
 import { redirect } from "next/navigation";
 import { requireVerifiedUser } from "@/lib/auth/gate";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { mockStats } from "@/components/ui";
 import { GalleryClient, type GalleryBot } from "./gallery-client";
 
 export default async function GalleryPage() {
@@ -32,14 +33,23 @@ export default async function GalleryPage() {
     scByBot.set(s.bot_profile_id, arr);
   }
 
-  const data: GalleryBot[] = (bots ?? []).map((b: any) => ({
-    id: b.id,
-    name: b.name,
-    persona: b.persona,
-    characterAge: b.character_age,
-    tags: b.tags ?? [],
-    scenarios: scByBot.get(b.id) ?? [],
-  }));
+  const data: GalleryBot[] = (bots ?? []).map((b: any) => {
+    const st = mockStats(b.id);
+    return {
+      id: b.id,
+      name: b.name,
+      quote: b.persona,
+      tags: b.tags ?? [],
+      characterAge: b.character_age,
+      views: st.views,
+      comments: st.comments,
+      likes: st.likes,
+      isNew: st.isNew,
+      rankScore: st.rankScore,
+      scenarioCount: (scByBot.get(b.id) ?? []).length,
+      scenarios: scByBot.get(b.id) ?? [],
+    };
+  });
 
   return <GalleryClient bots={data} />;
 }

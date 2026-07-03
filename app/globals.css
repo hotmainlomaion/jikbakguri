@@ -7,31 +7,98 @@
 }
 html,
 body {
-  background: #0f0e13;
-  color: #ece9f2;
+  background: #0d0d10;
+  color: #f2f2f5;
 }
 body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
 }
 
+/* 스크롤바 (다크) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a33;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium transition-colors;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors;
   }
   .btn-primary {
-    @apply btn bg-primary hover:bg-primaryHover text-white;
+    @apply btn bg-primary text-white;
+  }
+  .btn-primary:hover {
+    @apply bg-primaryHover;
   }
   .btn-ghost {
-    @apply btn border border-border text-text hover:bg-surface2;
+    @apply btn border border-border text-text;
+  }
+  .btn-ghost:hover {
+    @apply bg-surface3;
   }
   .card {
     @apply rounded-xl border border-border bg-surface p-5;
   }
   .input {
-    @apply w-full rounded-lg border border-border bg-surface2 px-3 py-2 text-sm outline-none focus:border-primary;
+    @apply w-full rounded-lg border border-border bg-surface2 px-3 py-2 text-sm text-text outline-none placeholder:text-subtle focus:border-primary;
   }
   .badge-19 {
-    @apply inline-flex h-6 w-6 items-center justify-center rounded-full bg-red-600 text-xs font-bold text-white;
+    @apply inline-flex h-6 w-6 items-center justify-center rounded-full bg-danger text-xs font-bold text-white;
+  }
+
+  /* 네비게이션 아이템 */
+  .nav-item {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted transition-colors;
+  }
+  .nav-item:hover {
+    @apply bg-surface text-text;
+  }
+  .nav-item-active {
+    @apply bg-surface text-text;
+  }
+  .nav-rail-item {
+    @apply flex h-11 w-11 items-center justify-center rounded-xl text-muted transition-colors;
+  }
+  .nav-rail-item:hover {
+    @apply bg-surface text-text;
+  }
+
+  /* 카테고리 칩 */
+  .chip {
+    @apply whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition-colors;
+  }
+  .chip-off {
+    @apply chip border border-border text-muted;
+  }
+  .chip-off:hover {
+    @apply bg-surface3 text-text;
+  }
+  .chip-on {
+    @apply chip bg-white text-black;
+  }
+
+  /* NEW / 신규 배지 */
+  .pill {
+    @apply inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white;
+  }
+
+  /* 태그 */
+  .tag {
+    @apply text-[13px] font-medium text-primary;
   }
 }
