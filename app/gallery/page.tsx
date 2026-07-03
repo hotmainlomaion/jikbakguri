@@ -1,8 +1,8 @@
-// S4. 봇 갤러리 — published 프로필 카드. 서버단 게이트 강제.
+// S4. 봇 갤러리 — 태그 필터 + 캐릭터 카드(대표컷 플레이스홀더) → 시나리오 선택 → 채팅.
 import { redirect } from "next/navigation";
 import { requireVerifiedUser } from "@/lib/auth/gate";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { StartSessionButton } from "./start-button";
+import { GalleryClient, type GalleryBot } from "./gallery-client";
 
 export default async function GalleryPage() {
   const gate = await requireVerifiedUser();
@@ -12,36 +12,34 @@ export default async function GalleryPage() {
   }
 
   const admin = createAdminClient();
-  const { data: bots } = await admin
-    .from("bot_profiles")
-    .select("id, name, persona, character_age")
-    .eq("is_published", true)
-    .order("created_at", { ascending: true });
+  const [{ data: bots }, { data: scenarios }] = await Promise.all([
+    admin
+      .from("bot_profiles")
+      .select("id, name, persona, character_age, tags")
+      .eq("is_published", true)
+      .order("created_at", { ascending: true }),
+    admin
+      .from("scenarios")
+      .select("id, bot_profile_id, title, description")
+      .eq("is_published", true)
+      .order("created_at", { ascending: true }),
+  ]);
 
-  return (
-    <main className="mx-auto max-w-4xl px-6 py-10">
-      <header className="mb-8 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">봇 갤러리</h1>
-        <nav className="flex gap-4 text-sm text-muted">
-          <a href="/history">히스토리</a>
-          <a href="/settings">설정</a>
-        </nav>
-      </header>
+  const scByBot = new Map<string, GalleryBot["scenarios"]>();
+  for (const s of scenarios ?? []) {
+    const arr = scByBot.get(s.bot_profile_id) ?? [];
+    arr.push({ id: s.id, title: s.title, description: s.description });
+    scByBot.set(s.bot_profile_id, arr);
+  }
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {(bots ?? []).map((b) => (
-          <div key={b.id} className="card flex flex-col">
-            <div className="mb-3 aspect-[4/3] rounded-lg bg-surface2" aria-hidden />
-            <h2 className="text-lg font-medium">{b.name}</h2>
-            <p className="mt-1 flex-1 text-sm text-muted">{b.persona}</p>
-            <p className="mt-2 text-xs text-muted">성인 캐릭터 · {b.character_age}세</p>
-            <StartSessionButton botId={b.id} />
-          </div>
-        ))}
-        {(!bots || bots.length === 0) && (
-          <p className="text-muted">아직 공개된 봇이 없습니다.</p>
-        )}
-      </div>
-    </main>
-  );
+  const data: GalleryBot[] = (bots ?? []).map((b: any) => ({
+    id: b.id,
+    name: b.name,
+    persona: b.persona,
+    characterAge: b.character_age,
+    tags: b.tags ?? [],
+    scenarios: scByBot.get(b.id) ?? [],
+  }));
+
+  return <GalleryClient bots={data} />;
 }

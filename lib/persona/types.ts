@@ -27,6 +27,13 @@ export interface CharacterMemory {
   content: string;
 }
 
+// 세션에 고정되는 시나리오 스냅샷(스토리라인).
+export interface ScenarioSnapshot {
+  title: string;
+  scenario: string; // 세계관/상황 — 시스템 프롬프트에 주입
+  greeting: string; // 첫 인사 — 오프닝 봇 메시지로 시드
+}
+
 // check_consistency 결과.
 export type ConsistencyViolationType =
   | "age_or_minor" // 안전 카테고리 — 하드(모더레이션이 최종 권한)

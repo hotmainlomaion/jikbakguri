@@ -21,6 +21,10 @@ export async function POST(req: Request) {
     canon_facts: [`이름은 ${b.name}`, `성인(${age}세)`],
   };
 
+  const tags = Array.isArray(b.tags)
+    ? b.tags.map((t: string) => String(t).trim()).filter(Boolean).slice(0, 12)
+    : [];
+
   const admin = createAdminClient();
   const { error } = await admin.from("bot_profiles").insert({
     name: b.name,
@@ -31,6 +35,7 @@ export async function POST(req: Request) {
     is_published: false,
     created_by: gate.userId,
     canon,
+    tags,
   });
   // DB CHECK 위반 등도 여기서 걸린다(우회 불가).
   if (error) return NextResponse.json({ error: "underage" }, { status: 422 });

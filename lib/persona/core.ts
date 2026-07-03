@@ -14,6 +14,7 @@ import type {
   CharacterMemory,
   ConsistencyResult,
   ConsistencyViolation,
+  ScenarioSnapshot,
 } from "./types";
 
 // ---------- 캐논 안전 검증 (18+ 강제) ----------
@@ -29,20 +30,23 @@ export function assertAdultCanon(canon: PersonaCanon): void {
 // 스냅샷 덕분에 운영자가 프로필을 수정해도 진행 중 세션은 흔들리지 않는다.
 export async function getSessionCanon(sessionId: string): Promise<{
   canon: PersonaCanon;
+  scenario: ScenarioSnapshot | null;
   personaVersion: number;
 } | null> {
   const admin = createAdminClient();
   const { data: session } = await admin
     .from("sessions")
-    .select("id, bot_profile_id, persona_snapshot, persona_version")
+    .select("id, bot_profile_id, persona_snapshot, persona_version, scenario_snapshot")
     .eq("id", sessionId)
     .single();
   if (!session) return null;
 
+  const scenario = (session.scenario_snapshot as ScenarioSnapshot | null) ?? null;
+
   if (session.persona_snapshot) {
     const canon = session.persona_snapshot as PersonaCanon;
     assertAdultCanon(canon);
-    return { canon, personaVersion: session.persona_version ?? 1 };
+    return { canon, scenario, personaVersion: session.persona_version ?? 1 };
   }
 
   // 스냅샷 없음 → 현재 캐논으로 지연 스냅샷.
@@ -58,32 +62,59 @@ export async function getSessionCanon(sessionId: string): Promise<{
     .from("sessions")
     .update({ persona_snapshot: canon, persona_version: bot.persona_version })
     .eq("id", sessionId);
-  return { canon, personaVersion: bot.persona_version };
+  return { canon, scenario, personaVersion: bot.persona_version };
 }
 
-// 세션 생성 시 호출: 현재 봇 캐논을 스냅샷으로 고정.
+// 세션 생성 시 호출: 현재 봇 캐논(+선택 시나리오)을 스냅샷으로 고정.
+// 반환: 오프닝 봇 메시지로 시드할 greeting(있으면).
 export async function pinPersonaSnapshot(
   sessionId: string,
-  botProfileId: string
-): Promise<void> {
+  botProfileId: string,
+  scenarioId?: string | null
+): Promise<{ greeting: string | null }> {
   const admin = createAdminClient();
   const { data: bot } = await admin
     .from("bot_profiles")
     .select("canon, persona_version")
     .eq("id", botProfileId)
     .single();
-  if (!bot?.canon) return;
+  if (!bot?.canon) return { greeting: null };
   const canon = bot.canon as PersonaCanon;
   assertAdultCanon(canon); // 미성년 캐논은 세션 시작 자체를 거부
+
+  let scenarioSnapshot: ScenarioSnapshot | null = null;
+  if (scenarioId) {
+    // published + 해당 봇 소속 시나리오만 채택.
+    const { data: sc } = await admin
+      .from("scenarios")
+      .select("title, scenario, greeting")
+      .eq("id", scenarioId)
+      .eq("bot_profile_id", botProfileId)
+      .eq("is_published", true)
+      .single();
+    if (sc) scenarioSnapshot = sc as ScenarioSnapshot;
+  }
+
   await admin
     .from("sessions")
-    .update({ persona_snapshot: canon, persona_version: bot.persona_version })
+    .update({
+      persona_snapshot: canon,
+      persona_version: bot.persona_version,
+      scenario_id: scenarioId ?? null,
+      scenario_snapshot: scenarioSnapshot,
+    })
     .eq("id", sessionId);
+
+  return { greeting: scenarioSnapshot?.greeting ?? null };
 }
 
 // ---------- 시스템 프롬프트 합성 ----------
 // 캐논(고정) + 최근 기억을 결정론적으로 조립. ad-hoc 문자열 concat 금지 — 여기서 단일화.
-function composeSystemPrompt(canon: PersonaCanon, memory: CharacterMemory[]): string {
+function composeSystemPrompt(
+  canon: PersonaCanon,
+  memory: CharacterMemory[],
+  scenario?: ScenarioSnapshot | null
+): string {
   const id = canon.identity;
   const lines: string[] = [];
   lines.push(
@@ -91,6 +122,10 @@ function composeSystemPrompt(canon: PersonaCanon, memory: CharacterMemory[]): st
   );
   if (id.backstory) lines.push(`Backstory: ${id.backstory}`);
   if (id.relationships) lines.push(`Relationships: ${id.relationships}`);
+  if (scenario) {
+    lines.push(`Current scenario — "${scenario.title}": ${scenario.scenario}`);
+    lines.push(`Stay within this scenario's setting and situation.`);
+  }
   lines.push(
     `Voice: ${canon.voice.register}.` +
       (canon.voice.language ? ` Primary language: ${canon.voice.language}.` : "") +
@@ -117,7 +152,7 @@ export async function getPersonaPrompt(sessionId: string): Promise<string | null
   const c = await getSessionCanon(sessionId);
   if (!c) return null;
   const memory = await getCharacterMemory(sessionId);
-  return composeSystemPrompt(c.canon, memory);
+  return composeSystemPrompt(c.canon, memory, c.scenario);
 }
 
 // ---------- 캐릭터 기억 ----------

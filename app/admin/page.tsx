@@ -2,20 +2,28 @@
 import { redirect } from "next/navigation";
 import { requireAdmin } from "@/lib/auth/gate";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { BotForm, PublishToggle, ReportActions, UserActions } from "./admin-ui";
+import { BotForm, PublishToggle, ReportActions, UserActions, ScenarioForm, ScenarioToggle } from "./admin-ui";
 
 export default async function AdminPage() {
   const gate = await requireAdmin();
   if (!gate.ok) redirect("/login");
 
   const admin = createAdminClient();
-  const [{ data: bots }, { data: logs }, { data: reports }, { data: users }] =
+  const [{ data: bots }, { data: scenarios }, { data: logs }, { data: reports }, { data: users }] =
     await Promise.all([
       admin.from("bot_profiles").select("*").order("created_at"),
+      admin.from("scenarios").select("id, bot_profile_id, title, is_published").order("created_at"),
       admin.from("moderation_logs").select("*").order("created_at", { ascending: false }).limit(50),
       admin.from("reports").select("*").order("created_at", { ascending: false }).limit(50),
       admin.from("users").select("id, email, status, is_adult_verified").limit(100),
     ]);
+
+  const scByBot = new Map<string, any[]>();
+  for (const s of scenarios ?? []) {
+    const arr = scByBot.get(s.bot_profile_id) ?? [];
+    arr.push(s);
+    scByBot.set(s.bot_profile_id, arr);
+  }
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-8">
@@ -26,12 +34,29 @@ export default async function AdminPage() {
         <BotForm />
         <div className="mt-4 space-y-2">
           {(bots ?? []).map((b: any) => (
-            <div key={b.id} className="flex items-center justify-between rounded-lg border border-border bg-surface px-4 py-3">
-              <div>
-                <span className="font-medium">{b.name}</span>{" "}
-                <span className="text-xs text-muted">· {b.character_age}세 · {b.is_published ? "공개" : "비공개"}</span>
+            <div key={b.id} className="rounded-lg border border-border bg-surface px-4 py-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-medium">{b.name}</span>{" "}
+                  <span className="text-xs text-muted">
+                    · {b.character_age}세 · {b.is_published ? "공개" : "비공개"}
+                    {b.tags?.length ? ` · ${b.tags.map((t: string) => "#" + t).join(" ")}` : ""}
+                  </span>
+                </div>
+                <PublishToggle id={b.id} published={b.is_published} />
               </div>
-              <PublishToggle id={b.id} published={b.is_published} />
+              {/* 시나리오 */}
+              <div className="mt-2 space-y-1 border-t border-border pt-2">
+                {(scByBot.get(b.id) ?? []).map((s: any) => (
+                  <div key={s.id} className="flex items-center justify-between text-sm">
+                    <span className="text-muted">
+                      {s.title} <span className="text-xs">· {s.is_published ? "공개" : "비공개"}</span>
+                    </span>
+                    <ScenarioToggle id={s.id} published={s.is_published} />
+                  </div>
+                ))}
+                <ScenarioForm botId={b.id} />
+              </div>
             </div>
           ))}
         </div>
