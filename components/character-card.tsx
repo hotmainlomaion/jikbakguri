@@ -16,17 +16,14 @@ export type CardBot = {
 export function CharacterCard({
   bot,
   onSelect,
-  width = 176,
 }: {
   bot: CardBot;
   onSelect: (b: CardBot) => void;
-  width?: number;
 }) {
   return (
     <button
       onClick={() => onSelect(bot)}
-      style={{ width }}
-      className="group shrink-0 text-left"
+      className="group w-36 shrink-0 text-left sm:w-44"
     >
       <div
         className="relative aspect-[3/4] overflow-hidden rounded-xl ring-1 ring-white/5 transition-transform group-hover:-translate-y-1"
@@ -62,9 +59,9 @@ export function CharacterCard({
 }
 
 // 행을 채우는 잠금 플레이스홀더(준비 중). 클릭 불가 — 실제 캐릭터 아님.
-export function LockedCard({ seed, width = 176 }: { seed: string; width?: number }) {
+export function LockedCard({ seed }: { seed: string }) {
   return (
-    <div style={{ width }} className="shrink-0">
+    <div className="w-36 shrink-0 sm:w-44">
       <div
         className="relative flex aspect-[3/4] items-center justify-center overflow-hidden rounded-xl ring-1 ring-white/5"
         style={{ background: gradientFor(seed) }}

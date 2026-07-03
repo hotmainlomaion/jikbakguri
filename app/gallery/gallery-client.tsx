@@ -2,6 +2,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { NavSidebar } from "@/components/nav-sidebar";
+import { BottomTabBar } from "@/components/bottom-tab-bar";
 import { CharacterCard, LockedCard, type CardBot } from "@/components/character-card";
 import { gradientFor } from "@/components/ui";
 import { IcSearch, IcCoin, IcChart } from "@/components/icons";
@@ -54,33 +55,33 @@ export function GalleryClient({ bots }: { bots: GalleryBot[] }) {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-bg">
+    <div className="flex h-[100dvh] overflow-hidden bg-bg">
       <NavSidebar ranking={ranking} />
 
       <main className="flex-1 overflow-y-auto">
         {/* 상단바 */}
-        <header className="sticky top-0 z-30 flex items-center gap-4 border-b border-line bg-bg/90 px-6 py-3 backdrop-blur">
-          <div className="relative mx-auto flex w-full max-w-xl items-center">
+        <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-line bg-bg/90 px-3 py-3 backdrop-blur sm:gap-4 sm:px-6">
+          <div className="relative mx-auto flex w-full items-center sm:max-w-xl">
             <IcSearch className="pointer-events-none absolute left-3 h-4 w-4 text-subtle" />
             <input
-              className="w-full rounded-lg border border-border bg-surface py-2 pl-9 pr-14 text-sm text-text placeholder:text-subtle focus:border-primary focus:outline-none"
+              className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-3 text-base text-text placeholder:text-subtle focus:border-primary focus:outline-none sm:py-2 sm:pr-14 sm:text-sm"
               placeholder="캐릭터, 태그, 작품 검색..."
             />
-            <kbd className="absolute right-3 rounded border border-border px-1.5 py-0.5 text-[10px] text-subtle">
+            <kbd className="absolute right-3 hidden rounded border border-border px-1.5 py-0.5 text-[10px] text-subtle sm:block">
               Ctrl K
             </kbd>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-sm text-muted">
+          <div className="flex items-center gap-1.5 sm:gap-3">
+            <button className="hidden items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-sm text-muted sm:flex">
               <IcChart className="h-4 w-4" /> 0
-            </span>
-            <span className="flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-sm font-semibold text-gold">
+            </button>
+            <button className="flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-sm font-semibold text-gold">
               <IcCoin className="h-4 w-4" /> 2,000
-            </span>
+            </button>
           </div>
         </header>
 
-        <div className="mx-auto max-w-6xl px-6 pb-16">
+        <div className="mx-auto max-w-6xl px-3 pb-24 sm:px-6 lg:pb-16">
           <Hero bots={bots.slice(0, 5)} onSelect={onSelect} />
 
           {/* 공지 */}
@@ -91,7 +92,7 @@ export function GalleryClient({ bots }: { bots: GalleryBot[] }) {
           </div>
 
           {/* 카테고리 칩 */}
-          <div className="no-scrollbar mt-6 flex gap-2 overflow-x-auto">
+          <div className="no-scrollbar -mx-3 mt-6 flex gap-2 overflow-x-auto px-3 sm:mx-0 sm:px-0">
             <button
               onClick={() => setActiveTag(null)}
               className={!activeTag ? "chip-on" : "chip-off"}
@@ -121,6 +122,8 @@ export function GalleryClient({ bots }: { bots: GalleryBot[] }) {
         </div>
       </main>
 
+      <BottomTabBar />
+
       {picker && (
         <ScenarioModal
           bot={picker}
@@ -148,14 +151,14 @@ function Row({
 }) {
   const pad = Math.max(0, ROW_LEN - bots.length);
   return (
-    <section className="mt-9">
+    <section className="mt-8 sm:mt-9">
       <div className="mb-3">
-        <h2 className="text-lg font-bold text-text">
+        <h2 className="text-base font-bold text-text sm:text-lg">
           {title} {emoji}
         </h2>
-        {subtitle && <p className="text-sm text-muted">{subtitle}</p>}
+        {subtitle && <p className="text-xs text-muted sm:text-sm">{subtitle}</p>}
       </div>
-      <div className="no-scrollbar flex gap-4 overflow-x-auto pb-1">
+      <div className="no-scrollbar -mx-3 flex gap-3 overflow-x-auto px-3 pb-2 pr-6 sm:mx-0 sm:gap-4 sm:px-0 sm:pr-0">
         {bots.map((b) => (
           <CharacterCard key={b.id} bot={b} onSelect={onSelect} />
         ))}
@@ -177,19 +180,19 @@ function Hero({ bots, onSelect }: { bots: GalleryBot[]; onSelect: (b: CardBot) =
   if (!bots.length) return null;
   const b = bots[i % bots.length];
   return (
-    <div className="relative mt-5 h-64 overflow-hidden rounded-2xl" style={{ background: gradientFor(b.name) }}>
+    <div className="relative mt-5 h-40 overflow-hidden rounded-2xl sm:h-64" style={{ background: gradientFor(b.name) }}>
       <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/30 to-transparent" />
-      <button onClick={() => onSelect(b)} className="absolute inset-0 flex flex-col justify-end p-8 text-left">
+      <button onClick={() => onSelect(b)} className="absolute inset-0 flex flex-col justify-end p-4 text-left sm:p-8">
         <div className="mb-2 flex gap-2">
           <span className="rounded bg-badgePurple px-2 py-0.5 text-xs font-semibold text-white">신규 시나리오</span>
           <span className="rounded bg-black/50 px-2 py-0.5 text-xs font-semibold text-white">인기 캐릭터</span>
         </div>
-        <h2 className="max-w-md text-2xl font-extrabold text-white">
+        <h2 className="line-clamp-2 max-w-md text-lg font-extrabold text-white sm:text-2xl">
           “{b.quote}”
         </h2>
-        <p className="mt-1 text-sm text-white/70">{b.name} · 성인 캐릭터 {b.characterAge}세</p>
+        <p className="mt-1 text-xs text-white/70 sm:text-sm">{b.name} · 성인 캐릭터 {b.characterAge}세</p>
       </button>
-      <div className="absolute bottom-4 right-6 flex gap-1.5">
+      <div className="absolute bottom-4 right-4 flex gap-1.5 sm:right-6">
         {bots.map((_, k) => (
           <span
             key={k}
@@ -213,11 +216,12 @@ function ScenarioModal({
   onClose: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 animate-fadeIn" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 px-0 animate-fadeIn sm:items-center sm:px-4" onClick={onClose}>
       <div
-        className="w-full max-w-md rounded-2xl border border-border bg-surface p-5 animate-slideUp"
+        className="w-full rounded-t-2xl border border-border bg-surface p-4 pb-safe animate-slideUp sm:max-w-md sm:rounded-2xl sm:p-5"
         onClick={(e) => e.stopPropagation()}
       >
+        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-border sm:hidden" />
         <h3 className="mb-1 text-lg font-bold text-text">{bot.name} · 시나리오 선택</h3>
         <p className="mb-4 text-sm text-muted">어떤 이야기로 시작할까요?</p>
         <div className="space-y-2">
@@ -229,7 +233,7 @@ function ScenarioModal({
               className="w-full rounded-lg border border-border bg-surface2 px-4 py-3 text-left transition-colors hover:border-primary disabled:opacity-60"
             >
               <div className="font-medium text-text">{s.title}</div>
-              <div className="truncate text-xs text-muted">{s.description}</div>
+              <div className="line-clamp-2 text-xs text-muted">{s.description}</div>
             </button>
           ))}
         </div>

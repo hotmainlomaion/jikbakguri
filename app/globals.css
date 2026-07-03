@@ -35,9 +35,18 @@ body {
   scrollbar-width: none;
 }
 
+/* safe-area (iOS 노치/제스처바) — viewport-fit=cover 필요(layout.tsx).
+   max()로 기본 여백(0.75rem)을 보장 → 데스크톱(env=0)에서도 패딩이 사라지지 않음(additive). */
+.pt-safe {
+  padding-top: max(env(safe-area-inset-top), 0.75rem);
+}
+.pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom), 0.75rem);
+}
+
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors;
+    @apply inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors sm:min-h-0;
   }
   .btn-primary {
     @apply btn bg-primary text-white;
@@ -55,7 +64,7 @@ body {
     @apply rounded-xl border border-border bg-surface p-5;
   }
   .input {
-    @apply w-full rounded-lg border border-border bg-surface2 px-3 py-2 text-sm text-text outline-none placeholder:text-subtle focus:border-primary;
+    @apply w-full rounded-lg border border-border bg-surface2 px-3 py-2.5 text-base text-text outline-none placeholder:text-subtle focus:border-primary sm:py-2 sm:text-sm;
   }
   .badge-19 {
     @apply inline-flex h-6 w-6 items-center justify-center rounded-full bg-danger text-xs font-bold text-white;
@@ -80,7 +89,7 @@ body {
 
   /* 카테고리 칩 */
   .chip {
-    @apply whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition-colors;
+    @apply inline-flex min-h-[44px] items-center whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition-colors sm:min-h-0;
   }
   .chip-off {
     @apply chip border border-border text-muted;

@@ -1,33 +1,14 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { Logo, Avatar } from "./ui";
-import {
-  IcHome,
-  IcCompass,
-  IcCrown,
-  IcChatBubble,
-  IcHeart,
-  IcImage,
-  IcPaw,
-  IcGear,
-} from "./icons";
-
-const NAV = [
-  { href: "/gallery", label: "홈", Icon: IcHome },
-  { href: "/gallery?view=explore", label: "탐색", Icon: IcCompass },
-  { href: "/gallery?view=ranking", label: "랭킹", Icon: IcCrown },
-  { href: "/history", label: "내 채팅", Icon: IcChatBubble },
-  { href: "/gallery?view=favorites", label: "즐겨찾기", Icon: IcHeart },
-  { href: "/gallery?view=collection", label: "컬렉션", Icon: IcImage },
-  { href: "/gallery?view=attendance", label: "출석 체크", Icon: IcPaw },
-  { href: "/settings", label: "설정", Icon: IcGear },
-];
+import { NAV, isActive } from "./nav-shared";
 
 export type RankItem = { id: string; name: string; tag: string; score: number };
 
 export function NavSidebar({ ranking = [] }: { ranking?: RankItem[] }) {
   const path = usePathname();
+  const view = useSearchParams().get("view");
 
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r border-line bg-bg2 lg:flex">
@@ -38,15 +19,16 @@ export function NavSidebar({ ranking = [] }: { ranking?: RankItem[] }) {
       </div>
 
       <nav className="flex flex-col gap-0.5 px-3">
-        {NAV.map(({ href, label, Icon }) => {
-          const active = href === "/gallery" ? path === "/gallery" : path === href.split("?")[0] && href !== "/gallery";
-          return (
-            <Link key={label} href={href} className={"nav-item" + (active ? " nav-item-active" : "")}>
-              <Icon className="h-[18px] w-[18px]" />
-              {label}
-            </Link>
-          );
-        })}
+        {NAV.map(({ href, label, Icon }) => (
+          <Link
+            key={label}
+            href={href}
+            className={"nav-item" + (isActive(href, path, view) ? " nav-item-active" : "")}
+          >
+            <Icon className="h-[18px] w-[18px]" />
+            {label}
+          </Link>
+        ))}
       </nav>
 
       {/* 이벤트 */}

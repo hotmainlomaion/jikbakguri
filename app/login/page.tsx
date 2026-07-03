@@ -37,7 +37,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
+    <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col justify-center px-4 sm:px-6">
       <div className="mb-6 flex items-center gap-2">
         <span className="badge-19">19</span>
         <h1 className="text-xl font-semibold">로그인 / 가입</h1>
@@ -56,6 +56,8 @@ export default function LoginPage() {
             <input
               type="email"
               required
+              autoComplete="email"
+              inputMode="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="input"
@@ -74,6 +76,7 @@ export default function LoginPage() {
             <label className="mb-1 block text-sm text-muted">비밀번호 (데모 로그인)</label>
             <input
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="input"

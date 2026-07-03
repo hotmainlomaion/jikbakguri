@@ -2,6 +2,7 @@
 "use client";
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { BottomTabBar } from "@/components/bottom-tab-bar";
 
 export default function SettingsPage() {
   const [confirming, setConfirming] = useState(false);
@@ -22,8 +23,9 @@ export default function SettingsPage() {
   }
 
   return (
-    <main className="mx-auto max-w-md px-6 py-10">
-      <h1 className="mb-6 text-2xl font-semibold">설정</h1>
+    <>
+    <main className="mx-auto max-w-md px-4 py-6 pb-24 sm:px-6 sm:py-10 lg:pb-10">
+      <h1 className="mb-4 text-xl font-semibold sm:mb-6 sm:text-2xl">설정</h1>
 
       <div className="card mb-4">
         <button onClick={signOut} className="btn-ghost w-full">
@@ -39,11 +41,11 @@ export default function SettingsPage() {
         </p>
         {msg && <p className="mb-2 text-sm text-red-400">{msg}</p>}
         {confirming ? (
-          <div className="flex gap-2">
-            <button onClick={deleteAccount} className="btn bg-red-600 text-white">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button onClick={deleteAccount} className="btn flex-1 bg-red-600 text-white">
               영구 삭제 확인
             </button>
-            <button onClick={() => setConfirming(false)} className="btn-ghost">
+            <button onClick={() => setConfirming(false)} className="btn-ghost flex-1">
               취소
             </button>
           </div>
@@ -54,5 +56,7 @@ export default function SettingsPage() {
         )}
       </div>
     </main>
+    <BottomTabBar />
+    </>
   );
 }

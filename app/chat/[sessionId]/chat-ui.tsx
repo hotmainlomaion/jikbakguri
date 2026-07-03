@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
-import { Avatar, gradientFor, formatCount } from "@/components/ui";
+import { Avatar, gradientFor } from "@/components/ui";
 import {
   IcHome,
   IcCompass,
@@ -14,26 +14,15 @@ import {
   IcCoin,
   IcChart,
   IcRefresh,
-  IcShare,
-  IcEye,
-  IcPin,
   IcPlus,
   IcSpark,
   IcVoice,
 } from "@/components/icons";
+import { ProfileImage, ProfileDetails, type ProfileBot } from "@/components/profile-panel";
+import { MobileProfileSheet } from "@/components/mobile-profile-sheet";
 
 type Msg = { id?: string; role: "user" | "assistant"; content: string };
-type Bot = {
-  name: string;
-  quote: string;
-  tags: string[];
-  characterAge: number;
-  views: number;
-  comments: number;
-  likes: number;
-  bedroom: number;
-  living: number;
-};
+type Bot = ProfileBot;
 type Hist = { id: string; name: string; lastActive: string };
 
 const BLOCK_MSG: Record<string, string> = {
@@ -63,6 +52,7 @@ export function ChatUI({
   const [notice, setNotice] = useState<string | null>(null);
   const [image, setImage] = useState<string | null>(null);
   const [tab, setTab] = useState<"daily" | "flutter">("daily");
+  const [sheet, setSheet] = useState<null | "profile">(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -120,14 +110,14 @@ export function ChatUI({
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-bg">
+    <div className="flex h-[100dvh] overflow-hidden bg-bg">
       <IconRail />
       <HistoryPanel history={history} active={sessionId} />
 
       {/* 중앙: 헤더 + [씬 이미지 | 메시지] */}
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b border-line px-4 py-3">
-          <Link href="/gallery" className="text-muted hover:text-text">
+        <header className="flex items-center gap-3 border-b border-line px-3 pt-safe py-3 sm:px-4">
+          <Link href="/gallery" className="-m-2 p-2 text-muted hover:text-text">
             <IcBack />
           </Link>
           <Avatar name={bot.name} size={32} />
@@ -139,21 +129,29 @@ export function ChatUI({
             <span className="rounded-full bg-surface px-3 py-1 text-xs text-muted">
               1턴 <b className="text-text">100냥</b> · {msgs.length}턴
             </span>
-            <span className="flex items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-gold">
+            <span className="hidden items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-gold sm:flex">
               <IcCoin className="h-3.5 w-3.5" /> 1,900
             </span>
-            <span className="flex items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs text-muted">
+            <span className="hidden items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs text-muted sm:flex">
               <IcChart className="h-3.5 w-3.5" /> 0
             </span>
+            {/* 모바일: 프로필 시트 열기(데스크톱은 우측 패널 상시 노출) */}
+            <button
+              onClick={() => setSheet("profile")}
+              className="-m-1 rounded-full p-1 text-muted hover:text-text lg:hidden"
+              aria-label="프로필"
+            >
+              <Avatar name={bot.name} size={28} />
+            </button>
           </div>
         </header>
 
-        <div className="flex min-h-0 flex-1">
-          {/* 씬 이미지 */}
-          <div className="relative hidden w-[42%] shrink-0 border-r border-line lg:block">
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          {/* 씬 이미지 — 모바일 상단 스트립 / 데스크톱 좌측 세로패널 */}
+          <div className="relative h-40 w-full shrink-0 border-b border-line lg:h-auto lg:w-[42%] lg:border-b-0 lg:border-r">
             <div className="absolute inset-0" style={{ background: gradientFor(bot.name) }} />
             <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/20" />
-            <span className="absolute inset-0 flex items-center justify-center text-[140px] font-black text-white/10">
+            <span className="absolute inset-0 flex items-center justify-center text-[72px] font-black text-white/10 lg:text-[140px]">
               {bot.name.slice(0, 1)}
             </span>
             <div className="absolute left-4 top-4 flex items-center gap-2 text-xs text-white/80">
@@ -174,7 +172,7 @@ export function ChatUI({
 
           {/* 메시지 + 입력 */}
           <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+            <div className="flex-1 space-y-4 overflow-y-auto px-3 py-5 sm:px-5">
               {msgs.map((m, i) => (
                 <MessageRow key={m.id ?? i} msg={m} botName={bot.name} />
               ))}
@@ -193,16 +191,16 @@ export function ChatUI({
             </div>
 
             {notice && (
-              <p className="mx-5 mb-2 rounded-lg bg-surface2 px-3 py-2 text-xs text-gold">{notice}</p>
+              <p className="mx-3 mb-2 rounded-lg bg-surface2 px-3 py-2 text-xs text-gold sm:mx-5">{notice}</p>
             )}
 
             {/* 입력바 */}
-            <div className="border-t border-line px-4 py-3">
-              <div className="mb-2 flex items-center gap-2 text-xs">
+            <div className="border-t border-line px-3 py-3 pb-safe sm:px-4">
+              <div className="no-scrollbar mb-2 flex items-center gap-2 overflow-x-auto text-xs">
                 <button
                   onClick={() => setTab("daily")}
                   className={
-                    "rounded-full px-3 py-1 " +
+                    "shrink-0 rounded-full px-3 py-1 " +
                     (tab === "daily" ? "bg-primary text-white" : "border border-border text-muted")
                   }
                 >
@@ -211,18 +209,18 @@ export function ChatUI({
                 <button
                   onClick={() => setTab("flutter")}
                   className={
-                    "rounded-full px-3 py-1 " +
+                    "shrink-0 rounded-full px-3 py-1 " +
                     (tab === "flutter" ? "bg-primary text-white" : "border border-border text-muted")
                   }
                 >
                   ♡ 설렘톡
                 </button>
-                <div className="ml-auto flex gap-2">
+                <div className="ml-auto flex shrink-0 gap-2">
                   <button className="flex items-center gap-1 rounded-full border border-border px-3 py-1 text-muted hover:bg-surface3">
-                    <IcSpark className="h-3.5 w-3.5" /> 상황추가
+                    <IcSpark className="h-3.5 w-3.5" /> <span className="hidden sm:inline">상황추가</span>
                   </button>
                   <button className="flex items-center gap-1 rounded-full border border-border px-3 py-1 text-muted hover:bg-surface3">
-                    <IcPlus className="h-3.5 w-3.5" /> 추천답장
+                    <IcPlus className="h-3.5 w-3.5" /> <span className="hidden sm:inline">추천답장</span>
                   </button>
                 </div>
               </div>
@@ -247,7 +245,7 @@ export function ChatUI({
                     }}
                     rows={1}
                     placeholder={`${bot.name}에게 메시지 보내기...`}
-                    className="input resize-none pr-10"
+                    className="input max-h-32 resize-none pr-10"
                   />
                   <button
                     onClick={send}
@@ -266,6 +264,14 @@ export function ChatUI({
         </div>
       </section>
 
+      {/* 모바일 프로필 바텀시트 */}
+      <MobileProfileSheet
+        bot={bot}
+        onReport={report}
+        open={sheet === "profile"}
+        onClose={() => setSheet(null)}
+      />
+
       <ProfilePanel bot={bot} onReport={report} />
     </div>
   );
@@ -275,7 +281,7 @@ function MessageRow({ msg, botName }: { msg: Msg; botName: string }) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-white">
+        <div className="max-w-[82%] break-words rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-white sm:max-w-[80%]">
           {msg.content}
         </div>
       </div>
@@ -285,15 +291,15 @@ function MessageRow({ msg, botName }: { msg: Msg; botName: string }) {
   const isNarration = /^\s*[「『].*[」』]\s*$/.test(msg.content.trim());
   if (isNarration) {
     return (
-      <p className="px-6 text-center text-[13px] italic leading-relaxed text-muted">{msg.content}</p>
+      <p className="px-3 text-center text-[13px] italic leading-relaxed text-muted sm:px-6">{msg.content}</p>
     );
   }
   return (
     <div className="flex gap-2">
       <Avatar name={botName} size={28} />
-      <div>
+      <div className="min-w-0">
         <p className="mb-1 text-xs text-subtle">{botName}</p>
-        <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-surface2 px-4 py-2.5 text-sm text-text">
+        <div className="max-w-[80%] break-words rounded-2xl rounded-tl-sm bg-surface2 px-4 py-2.5 text-sm text-text sm:max-w-[85%]">
           {msg.content}
         </div>
       </div>
@@ -361,73 +367,13 @@ function HistoryPanel({ history, active }: { history: Hist[]; active: string }) 
   );
 }
 
+// 데스크톱 우측 프로필 패널 — 모바일은 MobileProfileSheet가 동일 본문 공유.
 function ProfilePanel({ bot, onReport }: { bot: Bot; onReport: () => void }) {
   return (
     <aside className="hidden w-80 shrink-0 flex-col overflow-y-auto border-l border-line bg-bg2 lg:flex">
-      <div className="relative aspect-[4/5]" style={{ background: gradientFor(bot.name) }}>
-        <span className="absolute inset-0 flex items-center justify-center text-[120px] font-black text-white/12">
-          {bot.name.slice(0, 1)}
-        </span>
-        <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-bg2 to-transparent" />
-      </div>
-
+      <ProfileImage name={bot.name} className="aspect-[4/5]" />
       <div className="px-5 pb-8">
-        <div className="mt-3 flex items-center gap-2">
-          <Avatar name={bot.name} size={34} />
-          <h2 className="text-lg font-bold text-text">{bot.name}</h2>
-        </div>
-        <p className="mt-2 text-sm text-muted">“{bot.quote}”</p>
-
-        <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1">
-          {bot.tags.map((t) => (
-            <span key={t} className="tag">
-              #{t}
-            </span>
-          ))}
-          <span className="tag">#성인{bot.characterAge}</span>
-        </div>
-
-        <div className="mt-4 flex items-center gap-4 text-sm text-muted">
-          <span className="flex items-center gap-1">
-            <IcEye className="h-4 w-4" /> {bot.views.toLocaleString()}회
-          </span>
-          <span className="flex items-center gap-1">
-            <IcChatBubble className="h-4 w-4" /> {formatCount(bot.comments)}회
-          </span>
-          <span className="flex items-center gap-1">
-            <IcHeart className="h-4 w-4" /> {bot.likes}
-          </span>
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm">
-            <IcPin className="h-4 w-4 text-primary" /> 침실 <b className="ml-auto text-text">{bot.bedroom}장</b>
-          </div>
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm">
-            <IcPin className="h-4 w-4 text-primary" /> 거실 <b className="ml-auto text-text">{bot.living}장</b>
-          </div>
-        </div>
-
-        <div className="mt-4 flex gap-2">
-          <button className="btn-ghost flex-1">
-            <IcImage className="h-4 w-4" /> 시크릿 컬렉션
-          </button>
-          <button className="btn-ghost !px-3">
-            <IcHeart className="h-4 w-4" />
-          </button>
-          <button className="btn-ghost !px-3">
-            <IcShare className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="mt-5">
-          <p className="mb-1 flex items-center gap-1 text-sm font-semibold text-primary">❝ 코멘트</p>
-          <p className="text-[13px] leading-relaxed text-muted">{bot.quote}</p>
-        </div>
-
-        <button onClick={onReport} className="mt-5 text-xs text-subtle hover:text-danger">
-          🚩 신고하기
-        </button>
+        <ProfileDetails bot={bot} onReport={onReport} />
       </div>
     </aside>
   );
