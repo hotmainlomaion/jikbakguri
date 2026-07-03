@@ -13,17 +13,28 @@ export interface GeneratedImage {
 // LLM(uncensored)으로 "영어 이미지 프롬프트"로 번역·구성한다. 정체성(얼굴/머리/체형)만
 // 캐릭터에서 가져오고, 의상/노출/포즈/행동/배경은 사용자 지시를 그대로(검열/보정 없이) 반영.
 // 실패 시 원문 합성으로 폴백(최소 동작). 안전은 라우트의 입력 moderation + 출력 스크리닝이 담당.
-export async function buildImagePrompt(identity: string, userRequest: string): Promise<string> {
-  const sys =
-    "You are an expert NSFW prompt engineer for an uncensored text-to-image model (FLUX) that ONLY understands ENGLISH. " +
+export type ImageStyle = "photoreal" | "anime";
+
+export async function buildImagePrompt(
+  identity: string,
+  userRequest: string,
+  style: ImageStyle = "photoreal"
+): Promise<string> {
+  const common =
     "Output MUST be entirely in English — never Korean, Chinese, or any other language. " +
-    "Produce ONE detailed English image prompt — comma-separated concrete visual phrases. " +
     "From the character description keep ONLY physical identity (face, hair, body, adult features) and IGNORE any clothing it mentions. " +
     "The user's request fully controls clothing, nudity, sexual acts, anatomy, poses, expressions, and setting. " +
-    "Render it FAITHFULLY and EXPLICITLY: state every requested detail plainly in concrete visual terms — full nudity, sexual acts, positions, body parts, fluids, facial expressions — do NOT omit, soften, imply-instead-of-state, add clothing, tone down, moralize, or change intent. " +
-    "This is consenting adult (18+) content. Append quality tags: photorealistic, highly detailed, cinematic lighting, sharp focus. " +
-    "Output ONLY the final English prompt — no preamble, no quotes, no explanation, no non-English text, no disclaimers.";
-  const user = `Character physical identity (ignore its clothing): ${identity}\nUser request (translate to English & render literally, however explicit): ${userRequest}\n\nEnglish image prompt:`;
+    "Render it FAITHFULLY and EXPLICITLY: state every requested detail plainly — full nudity, sexual acts, positions, body parts, fluids, expressions — do NOT omit, soften, imply-instead-of-state, add clothing, tone down, moralize, or change intent. " +
+    "This is consenting adult (18+) content. ";
+  const sys =
+    style === "anime"
+      ? "You are an expert prompt engineer for an anime/illustration image model (SDXL, Animagine, Danbooru-tag style). " +
+        common +
+        "Produce ONE prompt as comma-separated DANBOORU-STYLE tags (e.g. 1girl, solo, long black hair, ...). Always start with the subject count tag. Use booru tags for pose/clothing/acts (e.g. nude, spread legs, nsfw). Output ONLY the tag list."
+      : "You are an expert NSFW prompt engineer for a photorealistic text-to-image model (FLUX) that ONLY understands ENGLISH. " +
+        common +
+        "Produce ONE detailed English image prompt — comma-separated concrete visual phrases. Append quality tags: photorealistic, highly detailed, cinematic lighting, sharp focus. Output ONLY the final English prompt.";
+  const user = `Character physical identity (ignore its clothing): ${identity}\nUser request (translate & render literally, however explicit): ${userRequest}\n\n${style === "anime" ? "Danbooru tags" : "English image prompt"}:`;
   // 번역은 영어를 깨끗이 내는 모델로(abliterate 챗 모델은 중국어를 뱉으므로 부적합).
   const model = process.env.ATLAS_IMAGE_PROMPT_MODEL || undefined;
   try {
@@ -41,18 +52,23 @@ export async function buildImagePrompt(identity: string, userRequest: string): P
   }
 }
 
-export async function generateImage(prompt: string): Promise<GeneratedImage> {
+export async function generateImage(
+  prompt: string,
+  opts?: { style?: ImageStyle; seed?: number | null }
+): Promise<GeneratedImage> {
   const baseURL = process.env.ATLAS_IMAGE_BASE_URL;
   const apiKey = process.env.ATLAS_IMAGE_API_KEY;
   const model = process.env.ATLAS_IMAGE_MODEL ?? "flux-schnell";
   if (!baseURL || !apiKey) throw new Error("ATLAS_IMAGE env not configured"); // TODO(운영주체 확인)
 
+  const style = opts?.style ?? "photoreal";
   const resp = await fetch(baseURL, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, prompt, steps: 4, n: 1 }),
-    // 로컬 FLUX(16GB, 스트리밍 양자화)는 첫 생성이 느릴 수 있어 여유 있게.
-    signal: AbortSignal.timeout(Number(process.env.ATLAS_IMAGE_TIMEOUT_MS ?? 300_000)),
+    // style로 백엔드 분기(photoreal=FLUX / anime=SDXL), seed로 캐릭터 일관성.
+    body: JSON.stringify({ model, prompt, style, seed: opts?.seed ?? undefined, steps: style === "anime" ? 26 : 4, n: 1 }),
+    // 로컬(16GB): 애니(SDXL)는 ~130s+로드라 넉넉히.
+    signal: AbortSignal.timeout(Number(process.env.ATLAS_IMAGE_TIMEOUT_MS ?? 600_000)),
   });
   if (!resp.ok) throw new Error(`atlas image ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();

@@ -5,6 +5,8 @@ out/
 .env
 .env.local
 .env*.local
+*.bak
+scratchpad/
 *.log
 .DS_Store
 files.zip

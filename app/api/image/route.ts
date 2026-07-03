@@ -36,18 +36,20 @@ export async function POST(req: Request) {
   // 봇 외형 고정 프롬프트 + 사용자 요청 합성.
   const { data: bot } = await admin
     .from("bot_profiles")
-    .select("appearance_desc")
+    .select("appearance_desc, image_style, image_seed")
     .eq("id", session.bot_profile_id)
     .single();
   const identity = bot?.appearance_desc ?? "";
+  const style = (bot?.image_style === "anime" ? "anime" : "photoreal") as "anime" | "photoreal";
+  const seed = bot?.image_seed ?? null;
 
   // 1) 입력 모더레이션 — 사용자 원문 의도(한국어 포함)를 호출 전 검사.
   const inMod = await moderate({ userId: gate.userId, channel: "image_in", text: `${identity} ${prompt}` });
   if (!inMod.pass)
     return NextResponse.json({ error: "blocked", category: inMod.category }, { status: 422 });
 
-  // 2) 영어 이미지 프롬프트 빌드(FLUX는 영어 전용 → 번역·의도 반영, 검열/보정 없음).
-  const composed = await buildImagePrompt(identity, prompt);
+  // 2) 스타일별 프롬프트 빌드(실사=영어 자연어 / 애니=danbooru 태그). 검열/보정 없음.
+  const composed = await buildImagePrompt(identity, prompt, style);
   // 디버그(로컬 튜닝용): 입력 원문 → 빌드된 영어 프롬프트. 프로덕션은 프롬프트 원문 미저장(7-D)
   // 원칙이므로 IMAGE_DEBUG 플래그가 있을 때만 콘솔에 남긴다.
   if (process.env.IMAGE_DEBUG)
@@ -56,10 +58,10 @@ export async function POST(req: Request) {
   if (heuristicScan(composed))
     return NextResponse.json({ error: "blocked", category: "minor" }, { status: 422 });
 
-  // 3) 생성.
+  // 3) 생성(캐릭터 style/seed로 백엔드 분기 + 일관성).
   let img;
   try {
-    img = await generateImage(composed);
+    img = await generateImage(composed, { style, seed });
   } catch {
     return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
   }
