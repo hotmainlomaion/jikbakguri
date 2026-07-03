@@ -18,7 +18,8 @@ export async function generateImage(prompt: string): Promise<GeneratedImage> {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({ model, prompt, steps: 4, n: 1 }),
-    signal: AbortSignal.timeout(60_000),
+    // 로컬 FLUX(16GB, 스트리밍 양자화)는 첫 생성이 느릴 수 있어 여유 있게.
+    signal: AbortSignal.timeout(Number(process.env.ATLAS_IMAGE_TIMEOUT_MS ?? 300_000)),
   });
   if (!resp.ok) throw new Error(`atlas image ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();
