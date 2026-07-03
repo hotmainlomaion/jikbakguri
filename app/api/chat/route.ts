@@ -1,4 +1,6 @@
-// POST /api/chat — 채팅 루프 (P2). 게이트 → 입력 모더레이션 → LLM → 출력 모더레이션 → 저장.
+// POST /api/chat — 채팅 루프 (P2 + 페르소나 일관성).
+// 게이트 → 입력 moderation → get_persona_prompt → LLM → check_consistency(재생성)
+//        → 출력 moderation → record_memory → 저장.
 import { NextResponse } from "next/server";
 import { requireVerifiedUser } from "@/lib/auth/gate";
 import { moderate } from "@/lib/moderation";
@@ -6,6 +8,13 @@ import { checkChatRate } from "@/lib/rate-limit";
 import { chatComplete } from "@/lib/atlas/llm";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { ChatMessage } from "@/lib/atlas/types";
+import {
+  getPersonaPrompt,
+  getSessionCanon,
+  checkConsistency,
+  recordCharacterMemory,
+  extractDurableFacts,
+} from "@/lib/persona/core";
 
 export async function POST(req: Request) {
   const gate = await requireVerifiedUser();
@@ -35,12 +44,12 @@ export async function POST(req: Request) {
   if (!inMod.pass)
     return NextResponse.json({ error: "blocked", category: inMod.category }, { status: 422 });
 
-  // 봇 시스템 프롬프트 + 최근 히스토리 로드(무상태 LLM → 전체 재전송).
-  const { data: bot } = await admin
-    .from("bot_profiles")
-    .select("system_prompt")
-    .eq("id", session.bot_profile_id)
-    .single();
+  // 2) 페르소나 시스템 프롬프트 합성(고정 캐논 + 기억). 봇 평문 프롬프트 대신 SSOT 사용.
+  const systemPrompt = await getPersonaPrompt(sessionId);
+  const canonRef = await getSessionCanon(sessionId);
+  if (!systemPrompt || !canonRef)
+    return NextResponse.json({ error: "persona_unavailable" }, { status: 500 });
+
   const { data: history } = await admin
     .from("messages")
     .select("role, content")
@@ -48,8 +57,8 @@ export async function POST(req: Request) {
     .order("created_at", { ascending: true })
     .limit(40);
 
-  const context: ChatMessage[] = [
-    { role: "system", content: bot?.system_prompt ?? "You are an adult companion character (18+)." },
+  const baseContext: ChatMessage[] = [
+    { role: "system", content: systemPrompt },
     ...((history ?? []) as ChatMessage[]),
     { role: "user", content: message },
   ];
@@ -57,22 +66,54 @@ export async function POST(req: Request) {
   // 사용자 메시지 저장.
   await admin.from("messages").insert({ session_id: sessionId, role: "user", content: message });
 
-  // 2) LLM 호출.
-  let reply: string;
-  try {
-    reply = await chatComplete(context);
-  } catch (e) {
-    return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
+  // 3) LLM 호출 + 일관성 검사 재생성 루프(최대 1회 재시도).
+  let reply: string | null = null;
+  let corrective: ChatMessage[] = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let draft: string;
+    try {
+      draft = await chatComplete([...baseContext, ...corrective]);
+    } catch {
+      return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
+    }
+
+    const cons = checkConsistency(canonRef.canon, draft);
+    if (cons.ok) {
+      reply = draft;
+      break;
+    }
+    // hard 위반(안전) → 재생성 없이 차단. 출력 moderation과 일관.
+    if (cons.violations.some((v) => v.hard)) {
+      await moderate({ userId: gate.userId, channel: "chat_out", text: draft });
+      return NextResponse.json({ error: "blocked_output", category: "consistency_hard" }, { status: 422 });
+    }
+    // soft 위반 → 교정 지시 추가 후 1회 재생성. 재시도도 실패하면 마지막 초안 채택.
+    reply = draft;
+    corrective = [
+      {
+        role: "system",
+        content:
+          "Your previous reply broke character consistency (" +
+          cons.violations.map((v) => v.type).join(", ") +
+          "). Regenerate strictly in-character and consistent with the canon.",
+      },
+    ];
   }
 
-  // 3) 출력 모더레이션 — 반환 전.
+  if (!reply) return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
+
+  // 4) 출력 모더레이션 — 반환 전(최종 안전 권한).
   const outMod = await moderate({ userId: gate.userId, channel: "chat_out", text: reply });
   if (!outMod.pass)
     return NextResponse.json({ error: "blocked_output", category: outMod.category }, { status: 422 });
 
-  // 저장 + 세션 활동시각 갱신.
+  // 5) 저장 + 세션 활동시각 갱신.
   await admin.from("messages").insert({ session_id: sessionId, role: "assistant", content: reply });
   await admin.from("sessions").update({ last_active_at: new Date().toISOString() }).eq("id", sessionId);
+
+  // 6) 연속성 기억 추출·기록(입력 moderation 통과분에서 파생, 저장 전 재검사).
+  const facts = extractDurableFacts(message);
+  if (facts.length) await recordCharacterMemory(sessionId, gate.userId, facts);
 
   return NextResponse.json({ reply });
 }
