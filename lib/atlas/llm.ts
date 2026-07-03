@@ -12,12 +12,17 @@ function client() {
 }
 
 // 무상태 LLM → 매 요청 컨텍스트 전체 재전송(system + history + new).
-export async function chatComplete(messages: ChatMessage[]): Promise<string> {
-  const model = process.env.ATLAS_LLM_MODEL;
+// opts.model로 모델 오버라이드(예: 이미지 프롬프트 번역은 영어 깨끗한 별도 모델).
+// 타임아웃은 로컬 대형 모델(14B, 16GB) 콜드 로드를 감안해 넉넉히(env 조정).
+export async function chatComplete(
+  messages: ChatMessage[],
+  opts?: { model?: string; temperature?: number }
+): Promise<string> {
+  const model = opts?.model ?? process.env.ATLAS_LLM_MODEL;
   if (!model) throw new Error("ATLAS_LLM_MODEL not set"); // TODO(운영주체 확인)
   const resp = await client().chat.completions.create(
-    { model, messages, temperature: 0.8, max_tokens: 800 },
-    { timeout: 30_000 }
+    { model, messages, temperature: opts?.temperature ?? 0.8, max_tokens: 800 },
+    { timeout: Number(process.env.ATLAS_LLM_TIMEOUT_MS ?? 180_000) }
   );
   const content = resp.choices?.[0]?.message?.content;
   if (!content) throw new Error("empty LLM response");

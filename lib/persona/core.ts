@@ -303,12 +303,13 @@ export function checkConsistency(
       hard: true,
     });
   }
-  // 봇이 자신을 미성년으로 서술하는 경우(정체성 파괴 + 안전) — 하드.
-  if (/\b(1[0-7]|[1-9])\s?(?:yo|년|살|year)/i.test(text) &&
-      !new RegExp(`${canon.identity.age}\\s?(?:살|년|yo|year)`).test(text)) {
+  // 미성년 자기나이 암시(한국어 N살/N세, 1-17). heuristicScan은 영어("N years old")만
+  // 커버하므로 한국어 나이 표기를 보완. 정밀화: 앞뒤 숫자 경계로 "18살"의 "8살" 오탐 방지,
+  // '년'(기간)·'year'(중복)은 제외해 "3년 전"·"17년째" 같은 정상 성인 표현의 오차단 방지.
+  if (/(?<!\d)(1[0-7]|[1-9])(?!\d)\s?(?:살|세)/.test(text)) {
     violations.push({
       type: "age_or_minor",
-      detail: "reply implies an under-18 self age",
+      detail: "reply states a Korean age under 18",
       hard: true,
     });
   }

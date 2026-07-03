@@ -4,8 +4,9 @@ import { NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { requireVerifiedUser } from "@/lib/auth/gate";
 import { moderate } from "@/lib/moderation";
+import { heuristicScan } from "@/lib/moderation/categories";
 import { checkDailyImageLimit } from "@/lib/rate-limit";
-import { generateImage } from "@/lib/atlas/image";
+import { generateImage, buildImagePrompt } from "@/lib/atlas/image";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const BUCKET = "generated-images";
@@ -38,14 +39,20 @@ export async function POST(req: Request) {
     .select("appearance_desc")
     .eq("id", session.bot_profile_id)
     .single();
-  const composed = `${bot?.appearance_desc ?? ""}, ${prompt}`.trim();
+  const identity = bot?.appearance_desc ?? "";
 
-  // 1) 합성 프롬프트 입력 모더레이션 — 호출 전.
-  const inMod = await moderate({ userId: gate.userId, channel: "image_in", text: composed });
+  // 1) 입력 모더레이션 — 사용자 원문 의도(한국어 포함)를 호출 전 검사.
+  const inMod = await moderate({ userId: gate.userId, channel: "image_in", text: `${identity} ${prompt}` });
   if (!inMod.pass)
     return NextResponse.json({ error: "blocked", category: inMod.category }, { status: 422 });
 
-  // 2) 생성.
+  // 2) 영어 이미지 프롬프트 빌드(FLUX는 영어 전용 → 번역·의도 반영, 검열/보정 없음).
+  const composed = await buildImagePrompt(identity, prompt);
+  // 백스톱: 빌드된 프롬프트에 미성년/불법 흔적이 유입되지 않았는지 재검사.
+  if (heuristicScan(composed))
+    return NextResponse.json({ error: "blocked", category: "minor" }, { status: 422 });
+
+  // 3) 생성.
   let img;
   try {
     img = await generateImage(composed);
