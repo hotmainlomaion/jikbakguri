@@ -53,11 +53,31 @@ export function ChatUI({
   const [image, setImage] = useState<string | null>(null);
   const [tab, setTab] = useState<"daily" | "flutter">("daily");
   const [sheet, setSheet] = useState<null | "profile">(null);
+  const [kbInset, setKbInset] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [msgs, busy, image]);
+  }, [msgs, busy, image, kbInset]);
+
+  // iOS 소프트 키보드 대응: dvh/env()는 키보드 높이를 반영하지 않는다.
+  // 루트 높이는 h-[100dvh] 그대로 두고, 키보드가 가린 높이만큼 padding-bottom만 추가 →
+  // 입력바가 키보드 위로 올라온다. 키보드가 없으면 inset=0이라 레이아웃 변화 없음(빈 공간 없음).
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      setKbInset(inset > 60 ? inset : 0); // 60px 미만은 노이즈로 무시
+    };
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
 
   function err(code?: string) {
     setNotice(BLOCK_MSG[code ?? ""] ?? "요청을 처리하지 못했습니다.");
@@ -110,7 +130,10 @@ export function ChatUI({
   }
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-bg">
+    <div
+      className="flex h-[100dvh] overflow-hidden bg-bg"
+      style={kbInset ? { paddingBottom: kbInset } : undefined}
+    >
       <IconRail />
       <HistoryPanel history={history} active={sessionId} />
 
