@@ -15,6 +15,18 @@ export interface GeneratedImage {
 // 실패 시 원문 합성으로 폴백(최소 동작). 안전은 라우트의 입력 moderation + 출력 스크리닝이 담당.
 export type ImageStyle = "photoreal" | "anime";
 
+// 한국 주요 고객 대상 실사 기본 미감(K-뷰티 스타일 프로파일).
+// 레퍼런스(자연스러운 한국 미인/클린걸 룩)의 "공통 미감"만 정체성-중립 서술로 정제해 반영한다.
+// ⚠️ 특정 실존 인물 얼굴 복제가 아니라 일반적 렌더 스타일(피부/메이크업/이목구비 결·촬영 톤)만 추가.
+//    캐릭터 고유 정체성(머리색/눈/체형=appearance_desc)과 seed 일관성은 그대로 유지된다.
+// 상세 기획: docs/korean-beauty-style.md
+export const KOREAN_BEAUTY_STYLE =
+  "natural Korean beauty aesthetic, Korean clean-girl look, attractive korean woman, " +
+  "dewy luminous glass skin, warm fair skin tone, soft natural makeup, straight soft eyebrows, " +
+  "subtle eye makeup, gradient tinted coral lips, refined delicate feminine features, slim v-line jaw, " +
+  "photogenic korean instagram idol style, soft natural cinematic lighting, DSLR 85mm portrait, " +
+  "shallow depth of field, photorealistic, highly detailed, sharp focus";
+
 export async function buildImagePrompt(
   identity: string,
   userRequest: string,
@@ -36,7 +48,11 @@ export async function buildImagePrompt(
         "Produce ONE prompt as comma-separated DANBOORU-STYLE tags (e.g. 1girl, solo, long black hair, ...). Always start with the subject count tag. Use booru tags for pose/clothing/acts (e.g. nude, spread legs, nsfw). Output ONLY the tag list."
       : "You are an expert NSFW prompt engineer for a photorealistic text-to-image model (FLUX) that ONLY understands ENGLISH. " +
         common +
-        "Produce ONE detailed English image prompt — comma-separated concrete visual phrases. Append quality tags: photorealistic, highly detailed, cinematic lighting, sharp focus. Output ONLY the final English prompt.";
+        "Produce ONE detailed English image prompt — comma-separated concrete visual phrases. " +
+        // K-뷰티 미감 반영: 캐릭터 고유 정체성(머리색/눈/체형)은 그대로 두고, 아래 스타일 태그를 끝에 덧붙인다.
+        "Then append these Korean-beauty style tags at the end (keep the character's own hair, eyes and body from the identity — these tags only set the skin/makeup/feature-quality and photo look): " +
+        KOREAN_BEAUTY_STYLE +
+        ". Output ONLY the final English prompt.";
   const user = `Character physical identity (ignore its clothing): ${identity}\nUser request (translate & render literally, however explicit): ${userRequest}\n\n${style === "anime" ? "Danbooru tags" : "English image prompt"}:`;
   // 번역은 영어를 깨끗이 내는 모델로(abliterate 챗 모델은 중국어를 뱉으므로 부적합).
   const model = process.env.ATLAS_IMAGE_PROMPT_MODEL || undefined;

@@ -22,10 +22,17 @@ const BUCKET = "character-images";
 const names = process.argv.slice(2);
 if (!names.length) { console.error("usage: node scripts/gen-avatars.mjs <Name...>"); process.exit(1); }
 
+// 실사 기본 미감: K-뷰티 스타일 프로파일(lib/atlas/image.ts KOREAN_BEAUTY_STYLE와 동기화).
+const KOREAN_BEAUTY =
+  "natural Korean beauty aesthetic, Korean clean-girl look, dewy luminous glass skin, warm fair skin tone, " +
+  "soft natural makeup, straight soft eyebrows, gradient tinted coral lips, refined delicate feminine features, " +
+  "slim v-line jaw, photogenic korean instagram idol style, soft natural cinematic lighting, DSLR 85mm portrait, " +
+  "shallow depth of field, photorealistic, highly detailed, sharp focus";
+
 function buildPrompt(desc, style) {
   return style === "anime"
     ? `${desc}, upper body, looking at viewer, solo`
-    : `${desc}, upper body portrait, looking at camera, photorealistic, highly detailed, cinematic lighting, sharp focus`;
+    : `${desc}, upper body portrait, looking at camera, ${KOREAN_BEAUTY}`;
 }
 
 for (const name of names) {
