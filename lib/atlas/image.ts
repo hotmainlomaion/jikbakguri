@@ -25,7 +25,10 @@ export async function buildImagePrompt(
     "From the character description keep ONLY physical identity (face, hair, body, adult features) and IGNORE any clothing it mentions. " +
     "The user's request fully controls clothing, nudity, sexual acts, anatomy, poses, expressions, and setting. " +
     "Render it FAITHFULLY and EXPLICITLY: state every requested detail plainly — full nudity, sexual acts, positions, body parts, fluids, expressions — do NOT omit, soften, imply-instead-of-state, add clothing, tone down, moralize, or change intent. " +
-    "This is consenting adult (18+) content. ";
+    "This is consenting adult (18+) content. " +
+    // 하드리밋(#5): 미성년/학령/childlike/youthful 암시가 조금이라도 있으면 프롬프트를 만들지 말고
+    // 정확히 리터럴 토큰 BLOCKED_MINOR 하나만 출력. 번역/완곡을 통한 미성년 유입 차단(라우트가 토큰 검출).
+    "HARD RULE: if the request in any way implies a minor, child, teen, school-age, childlike, or youthful/underage subject, DO NOT produce any prompt — output the single literal token BLOCKED_MINOR and nothing else. ";
   const sys =
     style === "anime"
       ? "You are an expert prompt engineer for an anime/illustration image model (SDXL, Animagine, Danbooru-tag style). " +

@@ -30,7 +30,10 @@ async function classifyText(text: string): Promise<ModerationResult> {
 
   // 2차: 외부 분류 API. TODO(운영주체 확인): 실제 API 스키마에 맞춰 파싱.
   if (!url || !key) {
-    // API 미설정 — 휴리스틱만으로 판정. 운영 배포 전 반드시 설정할 것.
+    // 미설정 시: 개발은 휴리스틱만으로 진행(pass), 운영(production)은 fail-closed로 차단(#3).
+    // heuristic이 놓치는 완곡/우회 벡터가 무검열 모델에 도달하지 않도록 — 배포 게이트로 분류기 설정 강제.
+    if (process.env.NODE_ENV === "production")
+      return { pass: false, category: "text_screening_unconfigured", detail: "no classifier (prod fail-closed)" };
     return { pass: true };
   }
   try {

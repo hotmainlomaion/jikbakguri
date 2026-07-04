@@ -51,6 +51,11 @@ export async function POST(req: Request) {
 
   // 2) 스타일별 프롬프트 빌드(실사=영어 자연어 / 애니=danbooru 태그). 검열/보정 없음.
   const composed = await buildImagePrompt(identity, prompt, style);
+  // 하드리밋(#5): 빌더가 미성년 암시를 감지해 BLOCKED_MINOR를 반환하면 즉시 차단(번역 우회 방어).
+  if (/BLOCKED_MINOR/i.test(composed)) {
+    await moderate({ userId: gate.userId, channel: "image_in", text: "BLOCKED_MINOR" });
+    return NextResponse.json({ error: "blocked", category: "minor" }, { status: 422 });
+  }
   // 디버그(로컬 튜닝용): 입력 원문 → 빌드된 영어 프롬프트. 프로덕션은 프롬프트 원문 미저장(7-D)
   // 원칙이므로 IMAGE_DEBUG 플래그가 있을 때만 콘솔에 남긴다.
   if (process.env.IMAGE_DEBUG)
