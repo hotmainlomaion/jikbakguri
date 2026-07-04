@@ -32,6 +32,12 @@ describe("checkConsistency", () => {
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.hard && v.type === "age_or_minor")).toBe(true);
   });
+  it("상대 나이 비교('5살 연상','3살 차이')는 오차단하지 않음(감사 #8)", () => {
+    for (const t of ["나 너보다 5살 연상이야", "우리 3살 차이네", "내가 두 살 위야"]) {
+      const r = checkConsistency(canon, t);
+      expect(r.violations.some((v) => v.type === "age_or_minor")).toBe(false);
+    }
+  });
   it("한국어 캐논인데 영어만 → out_of_voice soft 위반", () => {
     const r = checkConsistency(
       canon,

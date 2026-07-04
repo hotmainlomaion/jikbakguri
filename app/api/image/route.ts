@@ -4,8 +4,7 @@ import { NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { requireVerifiedUser } from "@/lib/auth/gate";
 import { moderate } from "@/lib/moderation";
-import { heuristicScan } from "@/lib/moderation/categories";
-import { checkDailyImageLimit } from "@/lib/rate-limit";
+import { reserveImageQuota } from "@/lib/rate-limit";
 import { generateImage, buildImagePrompt } from "@/lib/atlas/image";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -20,9 +19,6 @@ export async function POST(req: Request) {
   if (!sessionId || typeof prompt !== "string" || !prompt.trim())
     return NextResponse.json({ error: "invalid_input" }, { status: 400 });
 
-  if (!(await checkDailyImageLimit(gate.userId)))
-    return NextResponse.json({ error: "daily_limit" }, { status: 429 });
-
   const admin = createAdminClient();
 
   const { data: session } = await admin
@@ -32,6 +28,11 @@ export async function POST(req: Request) {
     .single();
   if (!session || session.user_id !== gate.userId)
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
+
+  // 일일 상한을 '시도' 단위로 원자 예약(감사 #3·#4). 입력 모더레이션 전에 소모해
+  // 차단/실패 프롬프트도 쿼터를 쓰게 하고(비용 가드), 동시요청 TOCTOU를 제거한다.
+  if (!(await reserveImageQuota(gate.userId)))
+    return NextResponse.json({ error: "daily_limit" }, { status: 429 });
 
   // 봇 외형 고정 프롬프트 + 사용자 요청 합성.
   const { data: bot } = await admin
@@ -54,9 +55,11 @@ export async function POST(req: Request) {
   // 원칙이므로 IMAGE_DEBUG 플래그가 있을 때만 콘솔에 남긴다.
   if (process.env.IMAGE_DEBUG)
     console.log("[image] user:", JSON.stringify(prompt), "\n[image] built:", JSON.stringify(composed));
-  // 백스톱: 빌드된 프롬프트에 미성년/불법 흔적이 유입되지 않았는지 재검사.
-  if (heuristicScan(composed))
-    return NextResponse.json({ error: "blocked", category: "minor" }, { status: 422 });
+  // 백스톱(감사 #6): 빌드된 영어 프롬프트도 heuristic이 아닌 moderate()로 재검사해
+  // 외부 텍스트 분류기까지 통과시킨다(번역 과정에서 구체화된 위법 표현 방어). 원문·빌드결과 양쪽 검사.
+  const builtMod = await moderate({ userId: gate.userId, channel: "image_in", text: composed });
+  if (!builtMod.pass)
+    return NextResponse.json({ error: "blocked", category: builtMod.category ?? "minor" }, { status: 422 });
 
   // 3) 생성(캐릭터 style/seed로 백엔드 분기 + 일관성).
   let img;
