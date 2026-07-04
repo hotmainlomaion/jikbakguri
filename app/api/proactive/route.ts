@@ -9,7 +9,18 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { moderate } from "@/lib/moderation";
 import { chatComplete } from "@/lib/atlas/llm";
 import { getPersonaPrompt, getSessionCanon } from "@/lib/persona/core";
-import { isEligible, proactiveInstruction, type ProactiveFreq } from "@/lib/engagement/proactive";
+import { isEligible, proactiveInstruction, FREQ_INTERVAL_MS, type ProactiveFreq } from "@/lib/engagement/proactive";
+
+// 저장된 타임존(IANA)으로 서버측 현재 시각(0~23)을 계산(#10). 클라 localHour는 신뢰하지 않는다.
+function hourInTz(tz: string): number {
+  try {
+    const h = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(new Date());
+    const n = parseInt(h, 10);
+    return Number.isFinite(n) ? ((n % 24) + 24) % 24 : new Date().getHours();
+  } catch {
+    return new Date().getHours();
+  }
+}
 
 export async function POST(req: Request) {
   const gate = await requireVerifiedUser();
@@ -17,7 +28,6 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
   const nowMs = Date.now();
-  const nowHour = Number.isInteger(body.localHour) ? Math.max(0, Math.min(23, body.localHour)) : new Date().getHours();
   const force = !!body.force;
 
   const admin = createAdminClient();
@@ -25,12 +35,14 @@ export async function POST(req: Request) {
   // 설정 로드(없으면 off 기본).
   const { data: settings } = await admin
     .from("user_settings")
-    .select("proactive_freq, quiet_start, quiet_end")
+    .select("proactive_freq, quiet_start, quiet_end, timezone")
     .eq("user_id", gate.userId)
     .maybeSingle();
   const freq = (settings?.proactive_freq as ProactiveFreq) ?? "off";
   const quietStart = settings?.quiet_start ?? 0;
   const quietEnd = settings?.quiet_end ?? 8;
+  // 조용시간 판정 시각은 저장 tz 기준(서버 계산). 클라 localHour 미신뢰(#10).
+  const nowHour = hourInTz((settings?.timezone as string) ?? "Asia/Seoul");
   if (freq === "off" && !force) return NextResponse.json({ generated: false, reason: "disabled" });
 
   // 후보 세션: 지정 세션 또는 본인의 최근 세션들(가장 오래 쉰 것 우선).
@@ -68,6 +80,11 @@ export async function POST(req: Request) {
     if (eligible) { target = s; break; }
   }
   if (!target) return NextResponse.json({ generated: false, reason: "not_eligible" });
+
+  // 원자 클레임(#9): 동시 tick 중 1개만 성공. 간격 내 재발송/중복 선톡 방지.
+  const claimSecs = force ? 5 : Math.floor((FREQ_INTERVAL_MS[freq] ?? 3600_000) / 1000);
+  const { data: claimed } = await admin.rpc("claim_proactive", { p_session: target.id, p_min_interval_s: claimSecs });
+  if (claimed !== true) return NextResponse.json({ generated: false, reason: "claimed" });
 
   // 페르소나 프롬프트 + 맥락(롤링 요약) + 관계 단계로 안전한 선톡 생성.
   const systemPersona = await getPersonaPrompt(target.id);
@@ -110,6 +127,8 @@ export async function POST(req: Request) {
     content: message,
     is_proactive: true,
   });
+  // #14: 배지 판정용 비정규화 플래그 세팅(갤러리 N+1 제거). 사용자 응답 시 chat 라우트가 false로.
+  await admin.from("sessions").update({ last_message_is_proactive: true }).eq("id", target.id);
 
   return NextResponse.json({ generated: true, sessionId: target.id, botName, message });
 }

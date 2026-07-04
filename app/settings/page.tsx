@@ -33,10 +33,13 @@ export default function SettingsPage() {
     const qs = next.quietStart ?? quietStart;
     const qe = next.quietEnd ?? quietEnd;
     setFreq(f); setQuietStart(qs); setQuietEnd(qe); setPSaved(false);
+    // 조용시간 서버 판정용 tz를 브라우저에서 감지해 함께 저장(#10).
+    let tz = "Asia/Seoul";
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || tz; } catch {}
     const res = await fetch("/api/settings", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ proactive_freq: f, quiet_start: qs, quiet_end: qe }),
+      body: JSON.stringify({ proactive_freq: f, quiet_start: qs, quiet_end: qe, timezone: tz }),
     });
     if (res.ok) { setPSaved(true); setTimeout(() => setPSaved(false), 2000); }
   }

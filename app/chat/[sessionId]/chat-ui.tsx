@@ -69,6 +69,7 @@ export function ChatUI({
   const [tab, setTab] = useState<"daily" | "flutter">("daily");
   const [sheet, setSheet] = useState<null | "profile">(null);
   const [studio, setStudio] = useState(false);
+  const [pendingSelfie, setPendingSelfie] = useState<string | null>(null);
   const [safeView, setSafeView] = useState(false);
   const [peekId, setPeekId] = useState<string | null>(null);
   const [recallShown, setRecallShown] = useState(!!recall);
@@ -153,8 +154,9 @@ export function ChatUI({
         setTimeout(() => setStageUp(null), 5000);
       }
     }
-    // F20 인챗 셀피: 사진 요청 감지 시 캐릭터가 셀카를 "보낸다"(별도 이미지 파이프라인/모더레이션).
-    if (data.selfie) runImage(data.selfie, { asSelfie: true });
+    // F20 인챗 셀피(#7): 자동 생성 대신 확인 칩을 띄운다 — 사용자가 탭할 때만 생성해
+    // 일일 한도를 임의 소모하지 않게 한다.
+    if (data.selfie) setPendingSelfie(data.selfie);
   }
   const send = () => sendText(input);
 
@@ -170,7 +172,12 @@ export function ChatUI({
     });
     const data = await res.json().catch(() => ({}));
     setBusy(null);
-    if (!res.ok) return err(data.error);
+    if (!res.ok) {
+      // 셀피 맥락에선 한도 문구를 셀피용으로 구분(#7).
+      if (opts?.asSelfie && data.error === "daily_limit")
+        return setNotice("오늘은 사진을 더 받을 수 없어요. 내일 다시 받아볼 수 있어요.");
+      return err(data.error);
+    }
     setImage(data.url);
     setMsgs((m) => [
       ...m,
@@ -331,6 +338,28 @@ export function ChatUI({
 
             {notice && (
               <p className="mx-3 mb-2 rounded-lg bg-surface2 px-3 py-2 text-xs text-gold sm:mx-5">{notice}</p>
+            )}
+
+            {/* F20/#7 셀피 확인 칩 — 사진 요청 감지 시 탭해야만 생성(자동 소모 방지) */}
+            {pendingSelfie && !busy && (
+              <div className="flex items-center gap-2 px-3 pb-1 sm:px-5">
+                <button
+                  onClick={() => {
+                    const p = pendingSelfie;
+                    setPendingSelfie(null);
+                    runImage(p, { asSelfie: true });
+                  }}
+                  className="shrink-0 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+                >
+                  📷 {bot.name} 셀카 받기
+                </button>
+                <button
+                  onClick={() => setPendingSelfie(null)}
+                  className="shrink-0 rounded-full border border-border px-3 py-1.5 text-xs text-muted hover:bg-surface3"
+                >
+                  나중에
+                </button>
+              </div>
             )}
 
             {/* F32 오프너 빠른 답장 칩 */}

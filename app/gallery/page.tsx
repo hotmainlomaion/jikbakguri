@@ -28,10 +28,10 @@ export default async function GalleryPage() {
         .order("created_at", { ascending: true }),
       // F39 즐겨찾기(본인)
       admin.from("favorites").select("bot_profile_id").eq("user_id", gate.userId),
-      // F39 이어하기: 최근 활동 세션(본인)
+      // F39 이어하기 + F02 선톡 배지: 최근 활동 세션(본인). 배지는 비정규화 플래그로 N+1 제거(#14).
       admin
         .from("sessions")
-        .select("id, last_active_at, bot_profiles(name, tags)")
+        .select("id, last_active_at, last_message_is_proactive, bot_profiles(name, tags)")
         .eq("user_id", gate.userId)
         .order("last_active_at", { ascending: false })
         .limit(8),
@@ -67,28 +67,13 @@ export default async function GalleryPage() {
 
   const favoriteIds = (favs ?? []).map((f: any) => f.bot_profile_id);
 
-  // F02: 각 최근 세션의 최신 메시지가 선톡(미응답)인지 → 배지 표시.
-  const sessionIds = (recentSessions ?? []).map((s: any) => s.id);
-  const proactiveSet = new Set<string>();
-  await Promise.all(
-    sessionIds.map(async (sid: string) => {
-      const { data: last } = await admin
-        .from("messages")
-        .select("is_proactive")
-        .eq("session_id", sid)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (last?.is_proactive) proactiveSet.add(sid);
-    })
-  );
-
+  // F02 선톡 배지: 세션의 비정규화 플래그를 그대로 사용(개별 messages 쿼리 없음, #14).
   const continueList = (recentSessions ?? []).map((s: any) => ({
     sessionId: s.id,
     name: s.bot_profiles?.name ?? "AI",
     tag: s.bot_profiles?.tags?.[0] ?? "",
     lastActive: s.last_active_at,
-    hasProactive: proactiveSet.has(s.id),
+    hasProactive: !!s.last_message_is_proactive,
   }));
 
   return <GalleryClient bots={data} favoriteIds={favoriteIds} continueList={continueList} />;

@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { NavSidebar } from "@/components/nav-sidebar";
 import { BottomTabBar } from "@/components/bottom-tab-bar";
@@ -32,9 +32,17 @@ export function GalleryClient({
   const [loading, setLoading] = useState(false);
   const [favs, setFavs] = useState<Set<string>>(() => new Set(favoriteIds));
 
-  // F02: 진입 시 선톡 tick(best-effort, fire-and-forget). 적격 세션이 있으면 캐릭터가 먼저 메시지를
-  // 남긴다(다음 방문/재진입 시 배지·대기 메시지로 노출). 로컬 시각을 넘겨 조용시간 판정에 사용.
+  // F02(#9): 진입 시 선톡 tick — 하루 1회만 발사(sessionStorage) + StrictMode 이중 실행 ref 가드.
+  // 서버도 claim_proactive로 원자 클레임하므로 중복 선톡/비용 남용을 이중 차단.
+  const ticked = useRef(false);
   useEffect(() => {
+    if (ticked.current) return;
+    ticked.current = true;
+    try {
+      const key = `jb_proactive_tick_${new Date().toISOString().slice(0, 10)}`;
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, "1");
+    } catch {}
     fetch("/api/proactive", {
       method: "POST",
       headers: { "content-type": "application/json" },

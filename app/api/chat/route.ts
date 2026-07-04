@@ -70,8 +70,16 @@ export async function POST(req: Request) {
     { role: "user", content: message },
   ];
 
-  // 사용자 메시지 저장.
-  await admin.from("messages").insert({ session_id: sessionId, role: "user", content: message });
+  // 사용자 메시지 저장(차단 시 정리 위해 id 확보).
+  const { data: userMsg } = await admin
+    .from("messages")
+    .insert({ session_id: sessionId, role: "user", content: message })
+    .select("id")
+    .single();
+  // 출력 차단 시 방금 저장한 사용자 메시지를 삭제(#13): 차단된 턴이 롤링요약 컨텍스트에 남지 않게.
+  const dropUserMsg = async () => {
+    if (userMsg?.id) await admin.from("messages").delete().eq("id", userMsg.id);
+  };
 
   // 3) LLM 호출 + 일관성 검사 재생성 루프(최대 1회 재시도).
   let reply: string | null = null;
@@ -95,6 +103,7 @@ export async function POST(req: Request) {
     // hard 위반(안전) → 재생성 없이 차단. 출력 moderation과 일관.
     if (cons.violations.some((v) => v.hard)) {
       await moderate({ userId: gate.userId, channel: "chat_out", text: draft });
+      await dropUserMsg();
       return NextResponse.json({ error: "blocked_output", category: "consistency_hard" }, { status: 422 });
     }
     // soft 위반 → 교정 지시 추가 후 1회 재생성. 재시도도 실패하면 마지막 초안 채택.
@@ -114,12 +123,17 @@ export async function POST(req: Request) {
 
   // 4) 출력 모더레이션 — 반환 전(최종 안전 권한).
   const outMod = await moderate({ userId: gate.userId, channel: "chat_out", text: reply });
-  if (!outMod.pass)
+  if (!outMod.pass) {
+    await dropUserMsg(); // #13: 차단 턴은 컨텍스트에 남기지 않는다.
     return NextResponse.json({ error: "blocked_output", category: outMod.category }, { status: 422 });
+  }
 
-  // 5) 저장 + 세션 활동시각 갱신.
+  // 5) 저장 + 세션 활동시각 갱신. last_message_is_proactive=false(#14): 사용자 대화가 최신이므로 선톡 배지 해제.
   await admin.from("messages").insert({ session_id: sessionId, role: "assistant", content: reply });
-  await admin.from("sessions").update({ last_active_at: new Date().toISOString() }).eq("id", sessionId);
+  await admin
+    .from("sessions")
+    .update({ last_active_at: new Date().toISOString(), last_message_is_proactive: false })
+    .eq("id", sessionId);
 
   // 6) 연속성 기억 추출·기록(입력 moderation 통과분에서 파생, 저장 전 재검사).
   const facts = extractDurableFacts(message);

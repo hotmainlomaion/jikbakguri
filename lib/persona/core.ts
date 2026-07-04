@@ -22,8 +22,9 @@ import { type Mood, type MoodState, nextMood, moodPromptLine } from "./mood";
 import {
   type RelationshipStage,
   type StageDef,
+  STAGES,
   stageForIntimacy,
-  applyIntimacy,
+  intimacyDelta,
   relationshipPromptLine,
 } from "./relationship";
 
@@ -214,9 +215,10 @@ export async function updateSessionMood(
 ): Promise<SessionAffect | null> {
   try {
     const admin = createAdminClient();
+    // 감정 전이는 현재 mood를 읽어 계산(soft — last-writer 허용). 친밀도 증감은 RPC로 원자 처리.
     const { data: sess } = await admin
       .from("sessions")
-      .select("mood, mood_intensity, intimacy, relationship_stage")
+      .select("mood, mood_intensity")
       .eq("id", sessionId)
       .single();
     const cur: Mood = {
@@ -225,30 +227,27 @@ export async function updateSessionMood(
     };
     const next = nextMood(cur, userMessage);
 
-    // 친밀도: 새 감정 신호로 증감 → 단계 재계산(F10).
-    const prevIntimacy = (sess?.intimacy as number) ?? 0;
-    const prevStageKey = (sess?.relationship_stage as RelationshipStage) ?? "stranger";
-    const newIntimacy = applyIntimacy(prevIntimacy, next);
-    const stageDef = stageForIntimacy(newIntimacy);
-    const stageUp = stageDef.key !== prevStageKey && newIntimacy > prevIntimacy;
-
-    await admin
-      .from("sessions")
-      .update({
-        mood: next.state,
-        mood_intensity: next.intensity,
-        intimacy: newIntimacy,
-        relationship_stage: stageDef.key,
-      })
-      .eq("id", sessionId);
+    // 원자 갱신(#5/#11): intimacy 누적 유실 없음 + 단계 재계산 + 단계업 1회만.
+    const { data, error } = await admin.rpc("bump_session_affect", {
+      p_session: sessionId,
+      p_mood: next.state,
+      p_mi: next.intensity,
+      p_delta: intimacyDelta(next),
+    });
+    if (error) return null;
+    const row = (Array.isArray(data) ? data[0] : data) as
+      | { intimacy: number; stage: RelationshipStage; stage_up: boolean }
+      | undefined;
+    if (!row) return null;
+    const def = STAGES.find((s) => s.key === row.stage) ?? STAGES[0];
 
     return {
       mood: next,
-      intimacy: newIntimacy,
-      stage: stageDef.key,
-      stageLabel: stageDef.label,
-      stageEmoji: stageDef.emoji,
-      stageUp,
+      intimacy: row.intimacy,
+      stage: row.stage,
+      stageLabel: def.label,
+      stageEmoji: def.emoji,
+      stageUp: !!row.stage_up,
     };
   } catch {
     return null;
@@ -358,10 +357,12 @@ export async function maybeSummarize(sessionId: string, userId: string | null = 
     const mod = await moderate({ userId, channel: "chat_out", text: updated });
     if (!mod.pass) return;
 
+    // 단조 전진(#12): 병렬 턴이 워터마크를 후퇴시키지 않도록 현재 summary_upto보다 클 때만 갱신.
     await admin
       .from("sessions")
       .update({ rolling_summary: updated.trim().slice(0, 4000), summary_upto: targetUpto })
-      .eq("id", sessionId);
+      .eq("id", sessionId)
+      .lt("summary_upto", targetUpto);
   } catch {
     // best-effort — 요약 실패는 무시.
   }
