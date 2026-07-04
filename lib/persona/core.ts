@@ -18,6 +18,7 @@ import type {
   ConsistencyViolation,
   ScenarioSnapshot,
 } from "./types";
+import { type Mood, type MoodState, nextMood, moodPromptLine } from "./mood";
 
 // 최근 이 개수만큼의 메시지는 원문 유지, 그 이전은 롤링 요약으로 압축(장기 연속성).
 export const RECENT_WINDOW = 24;
@@ -38,22 +39,27 @@ export async function getSessionCanon(sessionId: string): Promise<{
   scenario: ScenarioSnapshot | null;
   personaVersion: number;
   rollingSummary: string | null;
+  mood: Mood;
 } | null> {
   const admin = createAdminClient();
   const { data: session } = await admin
     .from("sessions")
-    .select("id, bot_profile_id, persona_snapshot, persona_version, scenario_snapshot, rolling_summary")
+    .select("id, bot_profile_id, persona_snapshot, persona_version, scenario_snapshot, rolling_summary, mood, mood_intensity")
     .eq("id", sessionId)
     .single();
   if (!session) return null;
 
   const scenario = (session.scenario_snapshot as ScenarioSnapshot | null) ?? null;
   const rollingSummary = (session.rolling_summary as string | null) ?? null;
+  const mood: Mood = {
+    state: ((session.mood as MoodState) ?? "neutral"),
+    intensity: (session.mood_intensity as number) ?? 0,
+  };
 
   if (session.persona_snapshot) {
     const canon = session.persona_snapshot as PersonaCanon;
     assertAdultCanon(canon);
-    return { canon, scenario, personaVersion: session.persona_version ?? 1, rollingSummary };
+    return { canon, scenario, personaVersion: session.persona_version ?? 1, rollingSummary, mood };
   }
 
   // 스냅샷 없음 → 현재 캐논으로 지연 스냅샷.
@@ -69,7 +75,7 @@ export async function getSessionCanon(sessionId: string): Promise<{
     .from("sessions")
     .update({ persona_snapshot: canon, persona_version: bot.persona_version })
     .eq("id", sessionId);
-  return { canon, scenario, personaVersion: bot.persona_version, rollingSummary };
+  return { canon, scenario, personaVersion: bot.persona_version, rollingSummary, mood };
 }
 
 // 세션 생성 시 호출: 현재 봇 캐논(+선택 시나리오)을 스냅샷으로 고정.
@@ -121,7 +127,8 @@ function composeSystemPrompt(
   canon: PersonaCanon,
   memory: CharacterMemory[],
   scenario?: ScenarioSnapshot | null,
-  rollingSummary?: string | null
+  rollingSummary?: string | null,
+  mood?: Mood | null
 ): string {
   const id = canon.identity;
   const lines: string[] = [];
@@ -159,6 +166,11 @@ function composeSystemPrompt(
         memory.map((m) => m.content).join("; ") +
         "."
     );
+  // 지속형 감정 상태(F12) — 캐논/경계 뒤, 최종 지시 앞. 말투를 물들이되 하드리밋은 불변.
+  if (mood) {
+    const moodLine = moodPromptLine(mood);
+    if (moodLine) lines.push(moodLine);
+  }
   lines.push(
     `Stay fully in character and consistent with the above at all times. Do not break character to describe yourself as an AI unless safety requires it.`
   );
@@ -170,7 +182,34 @@ export async function getPersonaPrompt(sessionId: string): Promise<string | null
   const c = await getSessionCanon(sessionId);
   if (!c) return null;
   const memory = await getCharacterMemory(sessionId);
-  return composeSystemPrompt(c.canon, memory, c.scenario, c.rollingSummary);
+  return composeSystemPrompt(c.canon, memory, c.scenario, c.rollingSummary, c.mood);
+}
+
+// 매 턴 후 감정 상태 갱신(F12). 사용자 메시지 신호로 다음 감정 계산 후 세션에 지속.
+// best-effort — 실패해도 채팅을 막지 않는다. 반환: 갱신된 mood(UI 표시용).
+export async function updateSessionMood(sessionId: string, userMessage: string): Promise<Mood | null> {
+  try {
+    const admin = createAdminClient();
+    const { data: sess } = await admin
+      .from("sessions")
+      .select("mood, mood_intensity")
+      .eq("id", sessionId)
+      .single();
+    const cur: Mood = {
+      state: ((sess?.mood as MoodState) ?? "neutral"),
+      intensity: (sess?.mood_intensity as number) ?? 0,
+    };
+    const next = nextMood(cur, userMessage);
+    if (next.state !== cur.state || next.intensity !== cur.intensity) {
+      await admin
+        .from("sessions")
+        .update({ mood: next.state, mood_intensity: next.intensity })
+        .eq("id", sessionId);
+    }
+    return next;
+  } catch {
+    return null;
+  }
 }
 
 // ---------- 캐릭터 기억 ----------

@@ -21,9 +21,11 @@ import {
 import { ProfileImage, ProfileDetails, type ProfileBot } from "@/components/profile-panel";
 import { MobileProfileSheet } from "@/components/mobile-profile-sheet";
 
-type Msg = { id?: string; role: "user" | "assistant"; content: string };
+type Msg = { id?: string; role: "user" | "assistant"; content: string; imageUrl?: string; selfie?: boolean };
 type Bot = ProfileBot;
 type Hist = { id: string; name: string; lastActive: string };
+type Mood = { state: string; intensity: number; label: string; emoji: string };
+type Recall = { daysSince: number; firstMetLabel: string; messageCount: number; imageUrl: string | null };
 
 const BLOCK_MSG: Record<string, string> = {
   blocked: "입력이 안전 정책에 의해 차단되었습니다.",
@@ -33,17 +35,24 @@ const BLOCK_MSG: Record<string, string> = {
   ai_unavailable: "AI 서비스에 일시적으로 연결할 수 없습니다.",
 };
 
+// F32 오프너 빠른 답장 칩(성인 톤, 노골 아님 — 탭하면 그대로 전송).
+const OPENER_CHIPS = ["응, 나도 보고 싶었어", "무슨 생각 하고 있었어?", "가까이 와서 얘기하자"];
+
 export function ChatUI({
   sessionId,
   bot,
   scenarioTitle,
   initial,
+  mood: initialMood,
+  recall,
   history,
 }: {
   sessionId: string;
   bot: Bot;
   scenarioTitle: string | null;
   initial: Msg[];
+  mood: Mood;
+  recall: Recall | null;
   history: Hist[];
 }) {
   const [msgs, setMsgs] = useState<Msg[]>(initial);
@@ -51,8 +60,13 @@ export function ChatUI({
   const [busy, setBusy] = useState<null | "chat" | "image">(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [image, setImage] = useState<string | null>(null);
+  const [mood, setMood] = useState<Mood>(initialMood);
   const [tab, setTab] = useState<"daily" | "flutter">("daily");
   const [sheet, setSheet] = useState<null | "profile">(null);
+  const [studio, setStudio] = useState(false);
+  const [safeView, setSafeView] = useState(false);
+  const [peekId, setPeekId] = useState<string | null>(null);
+  const [recallShown, setRecallShown] = useState(!!recall);
   const [kbInset, setKbInset] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -60,15 +74,37 @@ export function ChatUI({
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgs, busy, image, kbInset]);
 
-  // iOS 소프트 키보드 대응: dvh/env()는 키보드 높이를 반영하지 않는다.
-  // 루트 높이는 h-[100dvh] 그대로 두고, 키보드가 가린 높이만큼 padding-bottom만 추가 →
-  // 입력바가 키보드 위로 올라온다. 키보드가 없으면 inset=0이라 레이아웃 변화 없음(빈 공간 없음).
+  // F46 세이프뷰: 선택 지속(localStorage) + 흔들기(devicemotion) 즉시 발동.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("jb_safeview") === "1") setSafeView(true);
+    } catch {}
+    const onMotion = (e: DeviceMotionEvent) => {
+      const a = e.accelerationIncludingGravity;
+      if (!a) return;
+      const mag = Math.abs(a.x ?? 0) + Math.abs(a.y ?? 0) + Math.abs(a.z ?? 0);
+      if (mag > 42) setSafeView(true); // 강하게 흔들면 즉시 가림
+    };
+    window.addEventListener("devicemotion", onMotion);
+    return () => window.removeEventListener("devicemotion", onMotion);
+  }, []);
+  function toggleSafeView() {
+    setSafeView((v) => {
+      const n = !v;
+      try {
+        localStorage.setItem("jb_safeview", n ? "1" : "0");
+      } catch {}
+      return n;
+    });
+  }
+
+  // iOS 소프트 키보드 대응(키보드 높이만큼 padding-bottom).
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
     const update = () => {
       const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-      setKbInset(inset > 60 ? inset : 0); // 60px 미만은 노이즈로 무시
+      setKbInset(inset > 60 ? inset : 0);
     };
     update();
     vv.addEventListener("resize", update);
@@ -83,28 +119,34 @@ export function ChatUI({
     setNotice(BLOCK_MSG[code ?? ""] ?? "요청을 처리하지 못했습니다.");
   }
 
-  async function send() {
-    const text = input.trim();
-    if (!text || busy) return;
+  // F32: 오프닝 상태 = 봇 인사만 있고 아직 사용자 발화 없음.
+  const isOpening = msgs.length <= 1 && !msgs.some((m) => m.role === "user");
+
+  async function sendText(text: string) {
+    const t = text.trim();
+    if (!t || busy) return;
     setInput("");
     setNotice(null);
-    setMsgs((m) => [...m, { role: "user", content: text }]);
+    setMsgs((m) => [...m, { role: "user", content: t }]);
     setBusy("chat");
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId, message: text }),
+      body: JSON.stringify({ sessionId, message: t }),
     });
     const data = await res.json().catch(() => ({}));
     setBusy(null);
-    if (res.ok) setMsgs((m) => [...m, { role: "assistant", content: data.reply }]);
-    else err(data.error);
+    if (!res.ok) return err(data.error);
+    setMsgs((m) => [...m, { role: "assistant", content: data.reply }]);
+    if (data.mood) setMood((prev) => ({ ...prev, ...data.mood })); // F12 감정 갱신
+    // F20 인챗 셀피: 사진 요청 감지 시 캐릭터가 셀카를 "보낸다"(별도 이미지 파이프라인/모더레이션).
+    if (data.selfie) runImage(data.selfie, { asSelfie: true });
   }
+  const send = () => sendText(input);
 
-  async function genImage() {
-    if (busy) return;
-    const prompt = window.prompt("생성할 이미지를 설명해 주세요");
-    if (!prompt?.trim()) return;
+  // 공용 이미지 생성 — 스튜디오(F17)·셀카(F20) 공통. /api/image가 style/seed·모더레이션 담당.
+  async function runImage(prompt: string, opts?: { asSelfie?: boolean }) {
+    if (busy || !prompt.trim()) return;
     setNotice(null);
     setBusy("image");
     const res = await fetch("/api/image", {
@@ -114,8 +156,12 @@ export function ChatUI({
     });
     const data = await res.json().catch(() => ({}));
     setBusy(null);
-    if (res.ok) setImage(data.url);
-    else err(data.error);
+    if (!res.ok) return err(data.error);
+    setImage(data.url);
+    setMsgs((m) => [
+      ...m,
+      { role: "assistant", content: "", imageUrl: data.url, selfie: opts?.asSelfie },
+    ]);
   }
 
   async function report() {
@@ -128,6 +174,9 @@ export function ChatUI({
     });
     setNotice("신고가 접수되었습니다. 운영자가 검토합니다.");
   }
+
+  const sceneImg = image ?? bot.avatarUrl ?? null; // F32: 생성물 없으면 대표컷을 오프닝 이미지로
+  const sceneBlurred = safeView && !!sceneImg && peekId !== "scene";
 
   return (
     <div
@@ -149,16 +198,24 @@ export function ChatUI({
             {scenarioTitle && <p className="truncate text-[11px] text-subtle">{scenarioTitle}</p>}
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <span className="rounded-full bg-surface px-3 py-1 text-xs text-muted">
-              1턴 <b className="text-text">100냥</b> · {msgs.length}턴
-            </span>
+            {/* F12 감정 칩 — 평온이 아니면 노출 */}
+            <MoodChip mood={mood} />
+            {/* F46 세이프뷰 토글 */}
+            <button
+              onClick={toggleSafeView}
+              title={safeView ? "세이프뷰 켜짐 — 탭하면 해제" : "세이프뷰 — 화면 즉시 가리기"}
+              aria-label="세이프뷰"
+              className={
+                "rounded-full px-2.5 py-1 text-sm " +
+                (safeView ? "bg-primary text-white" : "bg-surface text-muted hover:text-text")
+              }
+            >
+              {safeView ? "🙈" : "👁️"}
+            </button>
             <span className="hidden items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-gold sm:flex">
               <IcCoin className="h-3.5 w-3.5" /> 1,900
             </span>
-            <span className="hidden items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs text-muted sm:flex">
-              <IcChart className="h-3.5 w-3.5" /> 0
-            </span>
-            {/* 모바일: 프로필 시트 열기(데스크톱은 우측 패널 상시 노출) */}
+            {/* 모바일: 프로필 시트 열기 */}
             <button
               onClick={() => setSheet("profile")}
               className="-m-1 rounded-full p-1 text-muted hover:text-text lg:hidden"
@@ -174,30 +231,64 @@ export function ChatUI({
           <div className="relative h-40 w-full shrink-0 border-b border-line lg:h-auto lg:w-[42%] lg:border-b-0 lg:border-r">
             <div className="absolute inset-0" style={{ background: gradientFor(bot.name) }} />
             <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/20" />
-            <span className="absolute inset-0 flex items-center justify-center text-[72px] font-black text-white/10 lg:text-[140px]">
-              {bot.name.slice(0, 1)}
-            </span>
+            {!sceneImg && (
+              <span className="absolute inset-0 flex items-center justify-center text-[72px] font-black text-white/10 lg:text-[140px]">
+                {bot.name.slice(0, 1)}
+              </span>
+            )}
+            {sceneImg && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={sceneImg}
+                alt="장면 이미지"
+                onPointerDown={() => safeView && setPeekId("scene")}
+                onPointerUp={() => setPeekId(null)}
+                onPointerLeave={() => setPeekId(null)}
+                className={
+                  "absolute inset-0 h-full w-full object-cover transition-[filter] duration-200 " +
+                  (sceneBlurred ? "blur-2xl" : "")
+                }
+              />
+            )}
+            {sceneBlurred && (
+              <div className="absolute inset-0 flex items-center justify-center text-xs text-white/80">
+                🙈 눌러서 보기
+              </div>
+            )}
             <div className="absolute left-4 top-4 flex items-center gap-2 text-xs text-white/80">
               <span className="h-4 w-4 rounded-full border border-white/40" />
-              0% · {image ? "1 / 1" : `${msgs.length} / ${msgs.length}`}
+              {image ? "생성 이미지" : bot.avatarUrl ? "대표컷" : `${msgs.length}턴`}
             </div>
-            <button className="absolute right-4 top-4 rounded-full bg-black/40 p-2 text-white/80 hover:bg-black/60">
-              <IcRefresh className="h-4 w-4" />
-            </button>
-            {image && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={image} alt="생성 이미지" className="absolute inset-0 h-full w-full object-cover" />
-            )}
-            <button className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1.5 text-xs text-white/90 backdrop-blur hover:bg-black/70">
-              🖼️ 장면 선택 ▾
+            <button
+              onClick={() => setStudio(true)}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1.5 text-xs text-white/90 backdrop-blur hover:bg-black/70"
+            >
+              🎨 변형 스튜디오 ▾
             </button>
           </div>
 
           {/* 메시지 + 입력 */}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex-1 space-y-4 overflow-y-auto px-3 py-5 sm:px-5">
+              {/* F09 오늘의 회상 카드 */}
+              {recall && recallShown && (
+                <RecallCard
+                  recall={recall}
+                  botName={bot.name}
+                  safeView={safeView}
+                  onClose={() => setRecallShown(false)}
+                />
+              )}
               {msgs.map((m, i) => (
-                <MessageRow key={m.id ?? i} msg={m} botName={bot.name} />
+                <MessageRow
+                  key={m.id ?? i}
+                  msg={m}
+                  botName={bot.name}
+                  safeView={safeView}
+                  peek={peekId === String(i)}
+                  onPeekStart={() => safeView && m.imageUrl && setPeekId(String(i))}
+                  onPeekEnd={() => setPeekId(null)}
+                />
               ))}
               {busy && (
                 <div className="flex items-center gap-2">
@@ -215,6 +306,21 @@ export function ChatUI({
 
             {notice && (
               <p className="mx-3 mb-2 rounded-lg bg-surface2 px-3 py-2 text-xs text-gold sm:mx-5">{notice}</p>
+            )}
+
+            {/* F32 오프너 빠른 답장 칩 */}
+            {isOpening && !busy && (
+              <div className="no-scrollbar flex gap-2 overflow-x-auto px-3 pb-1 sm:px-5">
+                {OPENER_CHIPS.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => sendText(c)}
+                    className="shrink-0 rounded-full border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/20"
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
             )}
 
             {/* 입력바 */}
@@ -239,19 +345,19 @@ export function ChatUI({
                   ♡ 설렘톡
                 </button>
                 <div className="ml-auto flex shrink-0 gap-2">
-                  <button className="flex items-center gap-1 rounded-full border border-border px-3 py-1 text-muted hover:bg-surface3">
-                    <IcSpark className="h-3.5 w-3.5" /> <span className="hidden sm:inline">상황추가</span>
-                  </button>
-                  <button className="flex items-center gap-1 rounded-full border border-border px-3 py-1 text-muted hover:bg-surface3">
-                    <IcPlus className="h-3.5 w-3.5" /> <span className="hidden sm:inline">추천답장</span>
+                  <button
+                    onClick={() => setStudio(true)}
+                    className="flex items-center gap-1 rounded-full border border-border px-3 py-1 text-muted hover:bg-surface3"
+                  >
+                    <IcSpark className="h-3.5 w-3.5" /> <span className="hidden sm:inline">변형 스튜디오</span>
                   </button>
                 </div>
               </div>
               <div className="flex items-end gap-2">
                 <button
-                  onClick={genImage}
+                  onClick={() => setStudio(true)}
                   disabled={!!busy}
-                  title="이미지 생성"
+                  title="변형 스튜디오"
                   className="btn-ghost shrink-0 !px-2.5"
                 >
                   <IcImage className="h-5 w-5" />
@@ -287,6 +393,19 @@ export function ChatUI({
         </div>
       </section>
 
+      {/* F17 변형 스튜디오 바텀시트 */}
+      {studio && (
+        <StudioSheet
+          botName={bot.name}
+          busy={busy === "image"}
+          onClose={() => setStudio(false)}
+          onGenerate={(prompt) => {
+            setStudio(false);
+            runImage(prompt);
+          }}
+        />
+      )}
+
       {/* 모바일 프로필 바텀시트 */}
       <MobileProfileSheet
         bot={bot}
@@ -300,7 +419,118 @@ export function ChatUI({
   );
 }
 
-function MessageRow({ msg, botName }: { msg: Msg; botName: string }) {
+// F12 감정 칩 — 평온/0이면 숨김.
+function MoodChip({ mood }: { mood: Mood }) {
+  if (!mood || mood.state === "neutral" || mood.intensity <= 0) return null;
+  return (
+    <span
+      title={`${bot_moodTitle(mood)}`}
+      className="flex items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs text-muted"
+    >
+      <span className="text-sm leading-none">{mood.emoji}</span>
+      <span className="hidden sm:inline">{mood.label}</span>
+      <span className="h-1.5 w-8 overflow-hidden rounded-full bg-surface3">
+        <span
+          className="block h-full rounded-full bg-primary"
+          style={{ width: `${Math.min(100, Math.max(8, mood.intensity))}%` }}
+        />
+      </span>
+    </span>
+  );
+}
+function bot_moodTitle(mood: Mood) {
+  return `지금 기분: ${mood.label} (${mood.intensity}/100)`;
+}
+
+// F09 오늘의 회상 카드.
+function RecallCard({
+  recall,
+  botName,
+  safeView,
+  onClose,
+}: {
+  recall: Recall;
+  botName: string;
+  safeView: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <div className="relative overflow-hidden rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/10 to-surface2 p-3">
+      <button
+        onClick={onClose}
+        aria-label="닫기"
+        className="absolute right-2 top-2 text-subtle hover:text-text"
+      >
+        ✕
+      </button>
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-primary">✨ 오늘의 회상</p>
+      <div className="flex items-center gap-3">
+        {recall.imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={recall.imageUrl}
+            alt="추억"
+            className={
+              "h-16 w-16 shrink-0 rounded-lg object-cover " + (safeView ? "blur-md" : "")
+            }
+          />
+        ) : (
+          <Avatar name={botName} size={56} />
+        )}
+        <div className="min-w-0 text-sm">
+          <p className="font-medium text-text">{recall.firstMetLabel}</p>
+          <p className="text-xs text-muted">
+            그동안 {recall.messageCount}번의 이야기를 나눴어요. {botName}와의 순간, 이어서 볼까요?
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MessageRow({
+  msg,
+  botName,
+  safeView,
+  peek,
+  onPeekStart,
+  onPeekEnd,
+}: {
+  msg: Msg;
+  botName: string;
+  safeView: boolean;
+  peek: boolean;
+  onPeekStart: () => void;
+  onPeekEnd: () => void;
+}) {
+  // 이미지 메시지(생성 이미지 / 셀카) 렌더.
+  if (msg.imageUrl) {
+    const blurred = safeView && !peek;
+    return (
+      <div className="flex gap-2">
+        <Avatar name={botName} size={28} />
+        <div className="min-w-0">
+          {msg.selfie && <p className="mb-1 text-xs text-primary">📷 {botName}가 셀카를 보냈어요</p>}
+          <div className="relative w-56 max-w-[70%] overflow-hidden rounded-2xl rounded-tl-sm">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={msg.imageUrl}
+              alt="생성 이미지"
+              onPointerDown={onPeekStart}
+              onPointerUp={onPeekEnd}
+              onPointerLeave={onPeekEnd}
+              className={"w-full object-cover transition-[filter] duration-200 " + (blurred ? "blur-2xl" : "")}
+            />
+            {blurred && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-xs text-white/90">
+                🙈 눌러서 보기
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
@@ -325,6 +555,103 @@ function MessageRow({ msg, botName }: { msg: Msg; botName: string }) {
         <div className="max-w-[80%] break-words rounded-2xl rounded-tl-sm bg-surface2 px-4 py-2.5 text-sm text-text sm:max-w-[85%]">
           {msg.content}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- F17 변형 스튜디오 ----------
+// 캐릭터 정체성(고정 seed·appearance_desc)은 라우트가 잠근다. 여기선 장면/포즈/의상만 조합.
+// 프리셋은 성인 전제이되 운영자-안전(미성년 암시 옵션 없음). 노골 강도는 자유입력으로.
+const STUDIO_GROUPS: { key: string; label: string; options: string[] }[] = [
+  { key: "pose", label: "포즈", options: ["앉아서", "서서", "누워서", "뒤돌아보며", "기대어"] },
+  { key: "outfit", label: "의상", options: ["지금 그대로", "캐주얼", "원피스", "잠옷", "수영복", "속옷 차림"] },
+  { key: "expr", label: "표정", options: ["미소", "부끄러운", "무표정", "유혹적인", "장난스런"] },
+  { key: "bg", label: "배경", options: ["침실", "거실", "카페", "해변", "도시 야경"] },
+  { key: "shot", label: "구도", options: ["클로즈업", "상반신", "전신", "셀카 앵글"] },
+];
+
+function StudioSheet({
+  botName,
+  busy,
+  onClose,
+  onGenerate,
+}: {
+  botName: string;
+  busy: boolean;
+  onClose: () => void;
+  onGenerate: (prompt: string) => void;
+}) {
+  const [sel, setSel] = useState<Record<string, string>>({});
+  const [free, setFree] = useState("");
+
+  function pick(group: string, opt: string) {
+    setSel((s) => ({ ...s, [group]: s[group] === opt ? "" : opt }));
+  }
+  const chosen = STUDIO_GROUPS.map((g) => sel[g.key]).filter(Boolean);
+  function build() {
+    const parts = [...chosen];
+    if (free.trim()) parts.push(free.trim());
+    return parts.join(", ");
+  }
+  const canGen = (chosen.length > 0 || free.trim().length > 0) && !busy;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 animate-fadeIn sm:items-center sm:px-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg rounded-t-3xl bg-bg2 p-5 sm:rounded-3xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-semibold text-text">🎨 {botName} 변형 스튜디오</h3>
+          <button onClick={onClose} className="text-subtle hover:text-text">✕</button>
+        </div>
+        <p className="mb-3 text-xs text-subtle">
+          같은 {botName}로 장면만 바꿔 생성해요. 원하는 걸 탭하거나 직접 적어주세요.
+        </p>
+        <div className="max-h-[46vh] space-y-3 overflow-y-auto">
+          {STUDIO_GROUPS.map((g) => (
+            <div key={g.key}>
+              <p className="mb-1.5 text-xs font-medium text-muted">{g.label}</p>
+              <div className="flex flex-wrap gap-2">
+                {g.options.map((opt) => (
+                  <button
+                    key={opt}
+                    onClick={() => pick(g.key, opt)}
+                    className={
+                      "rounded-full px-3 py-1.5 text-xs " +
+                      (sel[g.key] === opt
+                        ? "bg-primary text-white"
+                        : "border border-border text-muted hover:bg-surface3")
+                    }
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-muted">직접 묘사 (선택)</p>
+            <textarea
+              value={free}
+              onChange={(e) => setFree(e.target.value)}
+              rows={2}
+              placeholder="원하는 장면·분위기·수위를 자유롭게 적어주세요"
+              className="input resize-none text-sm"
+            />
+          </div>
+        </div>
+        <button
+          onClick={() => onGenerate(build())}
+          disabled={!canGen}
+          className="btn-primary mt-4 w-full disabled:opacity-50"
+        >
+          {busy ? "생성 중…" : "이미지 생성"}
+        </button>
       </div>
     </div>
   );

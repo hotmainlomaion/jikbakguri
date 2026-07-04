@@ -13,14 +13,45 @@ export type GalleryBot = CardBot & {
   rankScore: number;
   scenarios: { id: string; title: string; description: string }[];
 };
+export type ContinueItem = { sessionId: string; name: string; tag: string; lastActive: string };
 
 const ROW_LEN = 6;
 
-export function GalleryClient({ bots }: { bots: GalleryBot[] }) {
+export function GalleryClient({
+  bots,
+  favoriteIds = [],
+  continueList = [],
+}: {
+  bots: GalleryBot[];
+  favoriteIds?: string[];
+  continueList?: ContinueItem[];
+}) {
   const router = useRouter();
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [picker, setPicker] = useState<GalleryBot | null>(null);
   const [loading, setLoading] = useState(false);
+  const [favs, setFavs] = useState<Set<string>>(() => new Set(favoriteIds));
+
+  async function toggleFav(botId: string) {
+    // 낙관적 토글 후 서버 반영(실패 시 롤백).
+    setFavs((prev) => {
+      const n = new Set(prev);
+      n.has(botId) ? n.delete(botId) : n.add(botId);
+      return n;
+    });
+    const res = await fetch("/api/favorites", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ botProfileId: botId }),
+    });
+    if (!res.ok) {
+      setFavs((prev) => {
+        const n = new Set(prev);
+        n.has(botId) ? n.delete(botId) : n.add(botId);
+        return n;
+      });
+    }
+  }
 
   const allTags = useMemo(() => {
     const s = new Set<string>();
@@ -32,6 +63,7 @@ export function GalleryClient({ bots }: { bots: GalleryBot[] }) {
   const popular = [...filtered].sort((a, b) => b.views - a.views);
   const fresh = [...filtered].sort((a, b) => Number(b.isNew) - Number(a.isNew));
   const trend = [...filtered].sort((a, b) => b.rankScore - a.rankScore);
+  const favBots = filtered.filter((b) => favs.has(b.id));
   const ranking = [...bots]
     .sort((a, b) => b.rankScore - a.rankScore)
     .map((b) => ({ id: b.id, name: b.name, tag: b.tags[0] ?? "", score: b.rankScore }));
@@ -110,14 +142,25 @@ export function GalleryClient({ bots }: { bots: GalleryBot[] }) {
             ))}
           </div>
 
-          <Row title="인기 캐릭터" emoji="🔥" bots={popular} onSelect={onSelect} />
-          <Row title="신규 캐릭터" emoji="✨" bots={fresh} onSelect={onSelect} />
-          <Row title="주간 트렌드" emoji="⚡" bots={trend} onSelect={onSelect} />
+          {/* F39 이어하기 — 최근 대화 세션 원클릭 복귀 */}
+          {continueList.length > 0 && (
+            <ContinueRow items={continueList} onOpen={(sid) => router.push(`/chat/${sid}`)} />
+          )}
+          {/* F39 즐겨찾기 행 */}
+          {favBots.length > 0 && (
+            <Row title="즐겨찾기" emoji="♥" bots={favBots} onSelect={onSelect} favs={favs} onToggleFav={toggleFav} />
+          )}
+
+          <Row title="인기 캐릭터" emoji="🔥" bots={popular} onSelect={onSelect} favs={favs} onToggleFav={toggleFav} />
+          <Row title="신규 캐릭터" emoji="✨" bots={fresh} onSelect={onSelect} favs={favs} onToggleFav={toggleFav} />
+          <Row title="주간 트렌드" emoji="⚡" bots={trend} onSelect={onSelect} favs={favs} onToggleFav={toggleFav} />
           <Row
             title="익어야 제 맛"
             subtitle="깊을수록 짙어지는, 완숙美 그녀들"
             bots={popular}
             onSelect={onSelect}
+            favs={favs}
+            onToggleFav={toggleFav}
           />
         </div>
       </main>
@@ -142,14 +185,19 @@ function Row({
   subtitle,
   bots,
   onSelect,
+  favs,
+  onToggleFav,
 }: {
   title: string;
   emoji?: string;
   subtitle?: string;
   bots: GalleryBot[];
   onSelect: (b: CardBot) => void;
+  favs?: Set<string>;
+  onToggleFav?: (id: string) => void;
 }) {
-  const pad = Math.max(0, ROW_LEN - bots.length);
+  // 즐겨찾기 행은 실제 개수만 노출(플레이스홀더로 채우지 않음).
+  const pad = onToggleFav && title === "즐겨찾기" ? 0 : Math.max(0, ROW_LEN - bots.length);
   return (
     <section className="mt-8 sm:mt-9">
       <div className="mb-3">
@@ -160,10 +208,56 @@ function Row({
       </div>
       <div className="no-scrollbar -mx-3 flex gap-3 overflow-x-auto px-3 pb-2 pr-6 sm:mx-0 sm:gap-4 sm:px-0 sm:pr-0">
         {bots.map((b) => (
-          <CharacterCard key={b.id} bot={b} onSelect={onSelect} />
+          <CharacterCard
+            key={b.id}
+            bot={b}
+            onSelect={onSelect}
+            favorited={favs?.has(b.id)}
+            onToggleFav={onToggleFav}
+          />
         ))}
         {Array.from({ length: pad }).map((_, i) => (
           <LockedCard key={i} seed={title + i} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// F39 이어하기 — 최근 세션 카드(원클릭 복귀).
+function ContinueRow({ items, onOpen }: { items: ContinueItem[]; onOpen: (sessionId: string) => void }) {
+  return (
+    <section className="mt-8 sm:mt-9">
+      <div className="mb-3">
+        <h2 className="text-base font-bold text-text sm:text-lg">이어하기 ▶</h2>
+        <p className="text-xs text-muted sm:text-sm">보던 이야기, 바로 이어서</p>
+      </div>
+      <div className="no-scrollbar -mx-3 flex gap-3 overflow-x-auto px-3 pb-2 pr-6 sm:mx-0 sm:gap-4 sm:px-0 sm:pr-0">
+        {items.map((it) => (
+          <button
+            key={it.sessionId}
+            onClick={() => onOpen(it.sessionId)}
+            className="group w-36 shrink-0 text-left sm:w-44"
+          >
+            <div
+              className="relative aspect-[3/4] overflow-hidden rounded-xl ring-1 ring-white/5 transition-transform group-hover:-translate-y-1"
+              style={{ background: gradientFor(it.name) }}
+            >
+              <span className="absolute inset-0 flex items-center justify-center text-6xl font-black text-white/15">
+                {it.name.slice(0, 1)}
+              </span>
+              <span className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black/80 to-transparent" />
+              <span className="absolute left-2 top-2 z-10 rounded-md bg-primary/80 px-1.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur">
+                이어하기
+              </span>
+              <div className="absolute inset-x-0 bottom-0 p-3">
+                <h3 className="truncate text-[15px] font-bold text-white">{it.name}</h3>
+                <p className="truncate text-[12px] text-white/70">
+                  {new Date(it.lastActive).toLocaleDateString("ko-KR")}
+                </p>
+              </div>
+            </div>
+          </button>
         ))}
       </div>
     </section>

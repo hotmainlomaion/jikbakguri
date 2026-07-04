@@ -4,6 +4,8 @@ import { requireVerifiedUser } from "@/lib/auth/gate";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { mockStats } from "@/components/ui";
 import { getProfileMedia } from "@/lib/images/serve";
+import { getRecall } from "@/lib/engagement/recall";
+import { MOODS, type MoodState } from "@/lib/persona/mood";
 import { ChatUI } from "./chat-ui";
 
 export default async function ChatPage({ params }: { params: { sessionId: string } }) {
@@ -16,7 +18,7 @@ export default async function ChatPage({ params }: { params: { sessionId: string
   const admin = createAdminClient();
   const { data: session } = await admin
     .from("sessions")
-    .select("id, user_id, bot_profile_id, scenario_snapshot, bot_profiles(name, persona, tags, character_age)")
+    .select("id, user_id, bot_profile_id, scenario_snapshot, mood, mood_intensity, bot_profiles(name, persona, tags, character_age)")
     .eq("id", params.sessionId)
     .single();
 
@@ -43,6 +45,17 @@ export default async function ChatPage({ params }: { params: { sessionId: string
   // 실제 대표컷 + 컬렉션 개수(등록 이미지 없으면 폴백/0).
   const media = await getProfileMedia(session.bot_profile_id);
 
+  // F09 오늘의 회상(재진입 시), F12 현재 감정 상태.
+  const recall = await getRecall(params.sessionId);
+  const moodState = ((session as any).mood as MoodState) ?? "neutral";
+  const m = MOODS[moodState] ?? MOODS.neutral;
+  const mood = {
+    state: moodState,
+    intensity: ((session as any).mood_intensity as number) ?? 0,
+    label: m.label,
+    emoji: m.emoji,
+  };
+
   return (
     <ChatUI
       sessionId={params.sessionId}
@@ -60,6 +73,8 @@ export default async function ChatPage({ params }: { params: { sessionId: string
       }}
       scenarioTitle={scenario?.title ?? null}
       initial={(messages ?? []) as any}
+      mood={mood}
+      recall={recall}
       history={(sessions ?? []).map((s: any) => ({
         id: s.id,
         name: s.bot_profiles?.name ?? "AI",

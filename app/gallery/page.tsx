@@ -14,18 +14,28 @@ export default async function GalleryPage() {
   }
 
   const admin = createAdminClient();
-  const [{ data: bots }, { data: scenarios }] = await Promise.all([
-    admin
-      .from("bot_profiles")
-      .select("id, name, persona, character_age, tags")
-      .eq("is_published", true)
-      .order("created_at", { ascending: true }),
-    admin
-      .from("scenarios")
-      .select("id, bot_profile_id, title, description")
-      .eq("is_published", true)
-      .order("created_at", { ascending: true }),
-  ]);
+  const [{ data: bots }, { data: scenarios }, { data: favs }, { data: recentSessions }] =
+    await Promise.all([
+      admin
+        .from("bot_profiles")
+        .select("id, name, persona, character_age, tags")
+        .eq("is_published", true)
+        .order("created_at", { ascending: true }),
+      admin
+        .from("scenarios")
+        .select("id, bot_profile_id, title, description")
+        .eq("is_published", true)
+        .order("created_at", { ascending: true }),
+      // F39 즐겨찾기(본인)
+      admin.from("favorites").select("bot_profile_id").eq("user_id", gate.userId),
+      // F39 이어하기: 최근 활동 세션(본인)
+      admin
+        .from("sessions")
+        .select("id, last_active_at, bot_profiles(name, tags)")
+        .eq("user_id", gate.userId)
+        .order("last_active_at", { ascending: false })
+        .limit(8),
+    ]);
 
   const scByBot = new Map<string, GalleryBot["scenarios"]>();
   for (const s of scenarios ?? []) {
@@ -55,5 +65,13 @@ export default async function GalleryPage() {
     };
   });
 
-  return <GalleryClient bots={data} />;
+  const favoriteIds = (favs ?? []).map((f: any) => f.bot_profile_id);
+  const continueList = (recentSessions ?? []).map((s: any) => ({
+    sessionId: s.id,
+    name: s.bot_profiles?.name ?? "AI",
+    tag: s.bot_profiles?.tags?.[0] ?? "",
+    lastActive: s.last_active_at,
+  }));
+
+  return <GalleryClient bots={data} favoriteIds={favoriteIds} continueList={continueList} />;
 }
