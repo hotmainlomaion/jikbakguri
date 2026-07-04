@@ -6,6 +6,7 @@ import { mockStats } from "@/components/ui";
 import { getProfileMedia } from "@/lib/images/serve";
 import { getRecall } from "@/lib/engagement/recall";
 import { MOODS, type MoodState } from "@/lib/persona/mood";
+import { stageForIntimacy, stageProgress } from "@/lib/persona/relationship";
 import { ChatUI } from "./chat-ui";
 
 export default async function ChatPage({ params }: { params: { sessionId: string } }) {
@@ -18,7 +19,7 @@ export default async function ChatPage({ params }: { params: { sessionId: string
   const admin = createAdminClient();
   const { data: session } = await admin
     .from("sessions")
-    .select("id, user_id, bot_profile_id, scenario_snapshot, mood, mood_intensity, bot_profiles(name, persona, tags, character_age)")
+    .select("id, user_id, bot_profile_id, scenario_snapshot, mood, mood_intensity, intimacy, relationship_stage, bot_profiles(name, persona, tags, character_age)")
     .eq("id", params.sessionId)
     .single();
 
@@ -56,6 +57,17 @@ export default async function ChatPage({ params }: { params: { sessionId: string
     emoji: m.emoji,
   };
 
+  // F10 관계 단계 + 친밀도 게이지.
+  const intimacy = ((session as any).intimacy as number) ?? 0;
+  const stageDef = stageForIntimacy(intimacy);
+  const relationship = {
+    intimacy,
+    stage: stageDef.key,
+    label: stageDef.label,
+    emoji: stageDef.emoji,
+    progress: stageProgress(intimacy),
+  };
+
   return (
     <ChatUI
       sessionId={params.sessionId}
@@ -74,6 +86,7 @@ export default async function ChatPage({ params }: { params: { sessionId: string
       scenarioTitle={scenario?.title ?? null}
       initial={(messages ?? []) as any}
       mood={mood}
+      relationship={relationship}
       recall={recall}
       history={(sessions ?? []).map((s: any) => ({
         id: s.id,

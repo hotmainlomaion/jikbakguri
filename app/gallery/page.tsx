@@ -66,11 +66,29 @@ export default async function GalleryPage() {
   });
 
   const favoriteIds = (favs ?? []).map((f: any) => f.bot_profile_id);
+
+  // F02: 각 최근 세션의 최신 메시지가 선톡(미응답)인지 → 배지 표시.
+  const sessionIds = (recentSessions ?? []).map((s: any) => s.id);
+  const proactiveSet = new Set<string>();
+  await Promise.all(
+    sessionIds.map(async (sid: string) => {
+      const { data: last } = await admin
+        .from("messages")
+        .select("is_proactive")
+        .eq("session_id", sid)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (last?.is_proactive) proactiveSet.add(sid);
+    })
+  );
+
   const continueList = (recentSessions ?? []).map((s: any) => ({
     sessionId: s.id,
     name: s.bot_profiles?.name ?? "AI",
     tag: s.bot_profiles?.tags?.[0] ?? "",
     lastActive: s.last_active_at,
+    hasProactive: proactiveSet.has(s.id),
   }));
 
   return <GalleryClient bots={data} favoriteIds={favoriteIds} continueList={continueList} />;

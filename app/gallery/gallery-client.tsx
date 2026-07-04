@@ -13,7 +13,7 @@ export type GalleryBot = CardBot & {
   rankScore: number;
   scenarios: { id: string; title: string; description: string }[];
 };
-export type ContinueItem = { sessionId: string; name: string; tag: string; lastActive: string };
+export type ContinueItem = { sessionId: string; name: string; tag: string; lastActive: string; hasProactive?: boolean };
 
 const ROW_LEN = 6;
 
@@ -31,6 +31,16 @@ export function GalleryClient({
   const [picker, setPicker] = useState<GalleryBot | null>(null);
   const [loading, setLoading] = useState(false);
   const [favs, setFavs] = useState<Set<string>>(() => new Set(favoriteIds));
+
+  // F02: 진입 시 선톡 tick(best-effort, fire-and-forget). 적격 세션이 있으면 캐릭터가 먼저 메시지를
+  // 남긴다(다음 방문/재진입 시 배지·대기 메시지로 노출). 로컬 시각을 넘겨 조용시간 판정에 사용.
+  useEffect(() => {
+    fetch("/api/proactive", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ localHour: new Date().getHours() }),
+    }).catch(() => {});
+  }, []);
 
   async function toggleFav(botId: string) {
     // 낙관적 토글 후 서버 반영(실패 시 롤백).
@@ -250,10 +260,16 @@ function ContinueRow({ items, onOpen }: { items: ContinueItem[]; onOpen: (sessio
               <span className="absolute left-2 top-2 z-10 rounded-md bg-primary/80 px-1.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur">
                 이어하기
               </span>
+              {/* F02 선톡 대기 배지 */}
+              {it.hasProactive && (
+                <span className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-semibold text-white shadow">
+                  💬 선톡
+                </span>
+              )}
               <div className="absolute inset-x-0 bottom-0 p-3">
                 <h3 className="truncate text-[15px] font-bold text-white">{it.name}</h3>
                 <p className="truncate text-[12px] text-white/70">
-                  {new Date(it.lastActive).toLocaleDateString("ko-KR")}
+                  {it.hasProactive ? "새 메시지가 있어요" : new Date(it.lastActive).toLocaleDateString("ko-KR")}
                 </p>
               </div>
             </div>

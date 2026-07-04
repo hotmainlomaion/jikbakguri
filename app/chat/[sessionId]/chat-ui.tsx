@@ -25,6 +25,7 @@ type Msg = { id?: string; role: "user" | "assistant"; content: string; imageUrl?
 type Bot = ProfileBot;
 type Hist = { id: string; name: string; lastActive: string };
 type Mood = { state: string; intensity: number; label: string; emoji: string };
+type Relationship = { intimacy: number; stage: string; label: string; emoji: string; progress: number };
 type Recall = { daysSince: number; firstMetLabel: string; messageCount: number; imageUrl: string | null };
 
 const BLOCK_MSG: Record<string, string> = {
@@ -44,6 +45,7 @@ export function ChatUI({
   scenarioTitle,
   initial,
   mood: initialMood,
+  relationship: initialRel,
   recall,
   history,
 }: {
@@ -52,6 +54,7 @@ export function ChatUI({
   scenarioTitle: string | null;
   initial: Msg[];
   mood: Mood;
+  relationship: Relationship;
   recall: Recall | null;
   history: Hist[];
 }) {
@@ -61,6 +64,8 @@ export function ChatUI({
   const [notice, setNotice] = useState<string | null>(null);
   const [image, setImage] = useState<string | null>(null);
   const [mood, setMood] = useState<Mood>(initialMood);
+  const [rel, setRel] = useState<Relationship>(initialRel);
+  const [stageUp, setStageUp] = useState<string | null>(null);
   const [tab, setTab] = useState<"daily" | "flutter">("daily");
   const [sheet, setSheet] = useState<null | "profile">(null);
   const [studio, setStudio] = useState(false);
@@ -139,6 +144,15 @@ export function ChatUI({
     if (!res.ok) return err(data.error);
     setMsgs((m) => [...m, { role: "assistant", content: data.reply }]);
     if (data.mood) setMood((prev) => ({ ...prev, ...data.mood })); // F12 감정 갱신
+    // F10 관계 단계/친밀도 갱신 + 단계업 알림.
+    if (data.relationship) {
+      const r = data.relationship;
+      setRel((prev) => ({ ...prev, intimacy: r.intimacy, stage: r.stage, label: r.label, emoji: r.emoji, progress: r.progress ?? prev.progress }));
+      if (r.stageUp) {
+        setStageUp(`${r.emoji} 관계가 «${r.label}» 단계로 깊어졌어요`);
+        setTimeout(() => setStageUp(null), 5000);
+      }
+    }
     // F20 인챗 셀피: 사진 요청 감지 시 캐릭터가 셀카를 "보낸다"(별도 이미지 파이프라인/모더레이션).
     if (data.selfie) runImage(data.selfie, { asSelfie: true });
   }
@@ -187,7 +201,7 @@ export function ChatUI({
       <HistoryPanel history={history} active={sessionId} />
 
       {/* 중앙: 헤더 + [씬 이미지 | 메시지] */}
-      <section className="flex min-w-0 flex-1 flex-col">
+      <section className="relative flex min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-3 border-b border-line px-3 pt-safe py-3 sm:px-4">
           <Link href="/gallery" className="-m-2 p-2 text-muted hover:text-text">
             <IcBack />
@@ -198,6 +212,8 @@ export function ChatUI({
             {scenarioTitle && <p className="truncate text-[11px] text-subtle">{scenarioTitle}</p>}
           </div>
           <div className="ml-auto flex items-center gap-2">
+            {/* F10 관계 단계 배지 + 친밀도 게이지 */}
+            <RelationshipBadge rel={rel} />
             {/* F12 감정 칩 — 평온이 아니면 노출 */}
             <MoodChip mood={mood} />
             {/* F46 세이프뷰 토글 */}
@@ -225,6 +241,15 @@ export function ChatUI({
             </button>
           </div>
         </header>
+
+        {/* F10 단계업 토스트 */}
+        {stageUp && (
+          <div className="pointer-events-none absolute left-1/2 top-16 z-40 -translate-x-1/2 animate-fadeIn">
+            <span className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow-lg">
+              {stageUp}
+            </span>
+          </div>
+        )}
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
           {/* 씬 이미지 — 모바일 상단 스트립 / 데스크톱 좌측 세로패널 */}
@@ -416,6 +441,25 @@ export function ChatUI({
 
       <ProfilePanel bot={bot} onReport={report} />
     </div>
+  );
+}
+
+// F10 관계 단계 배지 + 친밀도 게이지.
+function RelationshipBadge({ rel }: { rel: Relationship }) {
+  return (
+    <span
+      title={`관계: ${rel.label} · 친밀도 ${rel.intimacy}/100`}
+      className="flex items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs text-muted"
+    >
+      <span className="text-sm leading-none">{rel.emoji}</span>
+      <span className="hidden sm:inline">{rel.label}</span>
+      <span className="h-1.5 w-8 overflow-hidden rounded-full bg-surface3">
+        <span
+          className="block h-full rounded-full bg-danger"
+          style={{ width: `${Math.min(100, Math.max(6, rel.progress))}%` }}
+        />
+      </span>
+    </span>
   );
 }
 

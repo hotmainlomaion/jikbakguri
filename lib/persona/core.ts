@@ -19,6 +19,13 @@ import type {
   ScenarioSnapshot,
 } from "./types";
 import { type Mood, type MoodState, nextMood, moodPromptLine } from "./mood";
+import {
+  type RelationshipStage,
+  type StageDef,
+  stageForIntimacy,
+  applyIntimacy,
+  relationshipPromptLine,
+} from "./relationship";
 
 // 최근 이 개수만큼의 메시지는 원문 유지, 그 이전은 롤링 요약으로 압축(장기 연속성).
 export const RECENT_WINDOW = 24;
@@ -40,11 +47,12 @@ export async function getSessionCanon(sessionId: string): Promise<{
   personaVersion: number;
   rollingSummary: string | null;
   mood: Mood;
+  stage: StageDef;
 } | null> {
   const admin = createAdminClient();
   const { data: session } = await admin
     .from("sessions")
-    .select("id, bot_profile_id, persona_snapshot, persona_version, scenario_snapshot, rolling_summary, mood, mood_intensity")
+    .select("id, bot_profile_id, persona_snapshot, persona_version, scenario_snapshot, rolling_summary, mood, mood_intensity, intimacy")
     .eq("id", sessionId)
     .single();
   if (!session) return null;
@@ -55,11 +63,12 @@ export async function getSessionCanon(sessionId: string): Promise<{
     state: ((session.mood as MoodState) ?? "neutral"),
     intensity: (session.mood_intensity as number) ?? 0,
   };
+  const stage = stageForIntimacy((session.intimacy as number) ?? 0);
 
   if (session.persona_snapshot) {
     const canon = session.persona_snapshot as PersonaCanon;
     assertAdultCanon(canon);
-    return { canon, scenario, personaVersion: session.persona_version ?? 1, rollingSummary, mood };
+    return { canon, scenario, personaVersion: session.persona_version ?? 1, rollingSummary, mood, stage };
   }
 
   // 스냅샷 없음 → 현재 캐논으로 지연 스냅샷.
@@ -75,7 +84,7 @@ export async function getSessionCanon(sessionId: string): Promise<{
     .from("sessions")
     .update({ persona_snapshot: canon, persona_version: bot.persona_version })
     .eq("id", sessionId);
-  return { canon, scenario, personaVersion: bot.persona_version, rollingSummary, mood };
+  return { canon, scenario, personaVersion: bot.persona_version, rollingSummary, mood, stage };
 }
 
 // 세션 생성 시 호출: 현재 봇 캐논(+선택 시나리오)을 스냅샷으로 고정.
@@ -128,7 +137,8 @@ function composeSystemPrompt(
   memory: CharacterMemory[],
   scenario?: ScenarioSnapshot | null,
   rollingSummary?: string | null,
-  mood?: Mood | null
+  mood?: Mood | null,
+  stage?: StageDef | null
 ): string {
   const id = canon.identity;
   const lines: string[] = [];
@@ -166,6 +176,8 @@ function composeSystemPrompt(
         memory.map((m) => m.content).join("; ") +
         "."
     );
+  // 관계 단계(F10) — 캐릭터의 호칭/거리감을 결정. 캐논/경계 뒤, 하드리밋과 독립.
+  if (stage) lines.push(relationshipPromptLine(stage));
   // 지속형 감정 상태(F12) — 캐논/경계 뒤, 최종 지시 앞. 말투를 물들이되 하드리밋은 불변.
   if (mood) {
     const moodLine = moodPromptLine(mood);
@@ -182,17 +194,29 @@ export async function getPersonaPrompt(sessionId: string): Promise<string | null
   const c = await getSessionCanon(sessionId);
   if (!c) return null;
   const memory = await getCharacterMemory(sessionId);
-  return composeSystemPrompt(c.canon, memory, c.scenario, c.rollingSummary, c.mood);
+  return composeSystemPrompt(c.canon, memory, c.scenario, c.rollingSummary, c.mood, c.stage);
 }
 
-// 매 턴 후 감정 상태 갱신(F12). 사용자 메시지 신호로 다음 감정 계산 후 세션에 지속.
-// best-effort — 실패해도 채팅을 막지 않는다. 반환: 갱신된 mood(UI 표시용).
-export async function updateSessionMood(sessionId: string, userMessage: string): Promise<Mood | null> {
+export interface SessionAffect {
+  mood: Mood;
+  intimacy: number;
+  stage: RelationshipStage;
+  stageLabel: string;
+  stageEmoji: string;
+  stageUp: boolean; // 이번 턴에 단계가 올라갔는가(UI 알림용)
+}
+
+// 매 턴 후 감정(F12) + 관계 친밀도/단계(F10)를 함께 갱신. 사용자 메시지 신호 기반.
+// best-effort — 실패해도 채팅을 막지 않는다. 반환: UI 표시용 상태.
+export async function updateSessionMood(
+  sessionId: string,
+  userMessage: string
+): Promise<SessionAffect | null> {
   try {
     const admin = createAdminClient();
     const { data: sess } = await admin
       .from("sessions")
-      .select("mood, mood_intensity")
+      .select("mood, mood_intensity, intimacy, relationship_stage")
       .eq("id", sessionId)
       .single();
     const cur: Mood = {
@@ -200,13 +224,32 @@ export async function updateSessionMood(sessionId: string, userMessage: string):
       intensity: (sess?.mood_intensity as number) ?? 0,
     };
     const next = nextMood(cur, userMessage);
-    if (next.state !== cur.state || next.intensity !== cur.intensity) {
-      await admin
-        .from("sessions")
-        .update({ mood: next.state, mood_intensity: next.intensity })
-        .eq("id", sessionId);
-    }
-    return next;
+
+    // 친밀도: 새 감정 신호로 증감 → 단계 재계산(F10).
+    const prevIntimacy = (sess?.intimacy as number) ?? 0;
+    const prevStageKey = (sess?.relationship_stage as RelationshipStage) ?? "stranger";
+    const newIntimacy = applyIntimacy(prevIntimacy, next);
+    const stageDef = stageForIntimacy(newIntimacy);
+    const stageUp = stageDef.key !== prevStageKey && newIntimacy > prevIntimacy;
+
+    await admin
+      .from("sessions")
+      .update({
+        mood: next.state,
+        mood_intensity: next.intensity,
+        intimacy: newIntimacy,
+        relationship_stage: stageDef.key,
+      })
+      .eq("id", sessionId);
+
+    return {
+      mood: next,
+      intimacy: newIntimacy,
+      stage: stageDef.key,
+      stageLabel: stageDef.label,
+      stageEmoji: stageDef.emoji,
+      stageUp,
+    };
   } catch {
     return null;
   }

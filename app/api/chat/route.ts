@@ -128,13 +128,20 @@ export async function POST(req: Request) {
   // 7) 롤링 요약 갱신(윈도우 초과 시에만 LLM 호출, best-effort — 실패해도 응답 무손상).
   await maybeSummarize(sessionId, gate.userId);
 
-  // 8) 지속형 감정 상태 갱신(F12) — 사용자 메시지 신호로. best-effort, UI 표시용 반환.
-  const mood = await updateSessionMood(sessionId, message);
+  // 8) 감정(F12) + 관계 친밀도/단계(F10) 갱신 — 사용자 메시지 신호로. best-effort, UI 표시용 반환.
+  const affect = await updateSessionMood(sessionId, message);
 
   // 9) 인챗 셀피(F20) — 사용자가 사진을 요청했으면 selfie 신호+파생 프롬프트를 반환한다.
   //    실제 생성/저장/모더레이션은 클라이언트가 /api/image 를 호출해 기존 파이프라인으로 수행
   //    (자동 프롬프트도 입력·출력 모더레이션을 그대로 통과 — 우회 경로 없음).
   const selfie = detectSelfieRequest(message) ? buildSelfieRequest(message, reply) : null;
 
-  return NextResponse.json({ reply, mood, selfie });
+  return NextResponse.json({
+    reply,
+    mood: affect ? affect.mood : null,
+    relationship: affect
+      ? { intimacy: affect.intimacy, stage: affect.stage, label: affect.stageLabel, emoji: affect.stageEmoji, stageUp: affect.stageUp }
+      : null,
+    selfie,
+  });
 }
