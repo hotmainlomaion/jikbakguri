@@ -1,0 +1,9 @@
+# GPU 배포 이미지 서버 의존성 (CUDA). MOCK=1 검증 시엔 불필요(순수 stdlib).
+# torch는 CUDA 휠로 설치(Dockerfile의 베이스 이미지가 CUDA 포함) — 버전은 GPU/드라이버에 맞춰 확정.
+torch>=2.3
+diffusers>=0.31
+transformers>=4.44,<5
+accelerate>=0.33
+safetensors>=0.4
+sentencepiece>=0.2
+protobuf>=4.25
