@@ -52,21 +52,36 @@ export async function buildImagePrompt(
   }
 }
 
+// ---------- 프로바이더 어댑터 계층(승급) ----------
+// IMAGE_PROVIDER로 백엔드 전환. 로컬 SDXL(16GB Mac ~500s)에서 GPU/호스티드로 승급하면
+// 애니 생성이 초~수초대로 빨라진다. 라우트/일관성(style·seed)·모더레이션은 그대로 재사용.
+//  · local   : {prompt,style,seed,steps}→{b64|url} 커스텀 계약. 로컬 image-server.py 및
+//              동일 계약을 GPU(RunPod/Vast/전용)에 올린 자체호스팅도 이 경로(코드 변경 0).
+//  · novita  : Novita.ai 호스티드(NSFW 허용). async txt2img → task-result 폴링.
+// 확장: 같은 GeneratedImage 계약으로 replicate/runpod 어댑터 추가 가능.
 export async function generateImage(
   prompt: string,
   opts?: { style?: ImageStyle; seed?: number | null }
 ): Promise<GeneratedImage> {
+  const provider = (process.env.IMAGE_PROVIDER ?? "local").toLowerCase();
+  const style = opts?.style ?? "photoreal";
+  const seed = opts?.seed ?? null;
+  if (provider === "novita") return generateNovita(prompt, style, seed);
+  return generateLocal(prompt, style, seed);
+}
+
+// 로컬/자체호스팅(동일 커스텀 계약). image-server.py 및 GPU에 올린 동일 서버.
+async function generateLocal(prompt: string, style: ImageStyle, seed: number | null): Promise<GeneratedImage> {
   const baseURL = process.env.ATLAS_IMAGE_BASE_URL;
   const apiKey = process.env.ATLAS_IMAGE_API_KEY;
   const model = process.env.ATLAS_IMAGE_MODEL ?? "flux-schnell";
   if (!baseURL || !apiKey) throw new Error("ATLAS_IMAGE env not configured"); // TODO(운영주체 확인)
 
-  const style = opts?.style ?? "photoreal";
   const resp = await fetch(baseURL, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
     // style로 백엔드 분기(photoreal=FLUX / anime=SDXL), seed로 캐릭터 일관성.
-    body: JSON.stringify({ model, prompt, style, seed: opts?.seed ?? undefined, steps: style === "anime" ? 26 : 4, n: 1 }),
+    body: JSON.stringify({ model, prompt, style, seed: seed ?? undefined, steps: style === "anime" ? 26 : 4, n: 1 }),
     // 로컬(16GB): 애니(SDXL)는 ~130s+로드라 넉넉히.
     signal: AbortSignal.timeout(Number(process.env.ATLAS_IMAGE_TIMEOUT_MS ?? 600_000)),
   });
@@ -75,4 +90,64 @@ export async function generateImage(
   // 구조 기반 파싱(위치 가정 최소화).
   const item = data?.data?.[0] ?? data?.images?.[0] ?? data;
   return { url: item?.url, b64: item?.b64_json ?? item?.b64 };
+}
+
+// Novita.ai 호스티드(NSFW 허용). async txt2img(POST) → task_id → task-result 폴링.
+// 모델명은 카탈로그별로 다르므로 env로 주입: 실사=NOVITA_MODEL_PHOTOREAL, 애니=NOVITA_MODEL_ANIME.
+async function generateNovita(prompt: string, style: ImageStyle, seed: number | null): Promise<GeneratedImage> {
+  const key = process.env.NOVITA_API_KEY;
+  if (!key) throw new Error("NOVITA_API_KEY not configured");
+  const model =
+    style === "anime"
+      ? process.env.NOVITA_MODEL_ANIME // 예: Pony/Illustrious/anime SDXL 체크포인트(TODO 운영주체 확인)
+      : process.env.NOVITA_MODEL_PHOTOREAL; // 예: 실사 SDXL/FLUX 체크포인트
+  if (!model) throw new Error(`NOVITA_MODEL_${style === "anime" ? "ANIME" : "PHOTOREAL"} not configured`);
+
+  const base = process.env.NOVITA_BASE_URL ?? "https://api.novita.ai";
+  const auth = { authorization: `Bearer ${key}`, "content-type": "application/json" };
+  const neg =
+    "lowres, bad anatomy, bad hands, extra digits, worst quality, low quality, jpeg artifacts, " +
+    "signature, watermark, censored, mosaic censoring, bar censor";
+
+  // 1) 작업 제출.
+  const submit = await fetch(`${base}/v3/async/txt2img`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      extra: { response_image_type: "png" },
+      request: {
+        model_name: model,
+        prompt,
+        negative_prompt: neg,
+        width: style === "anime" ? 832 : 768,
+        height: style === "anime" ? 1216 : 1024,
+        image_num: 1,
+        steps: Number(process.env.NOVITA_STEPS ?? (style === "anime" ? 28 : 20)),
+        guidance_scale: Number(process.env.NOVITA_GUIDANCE ?? (style === "anime" ? 5 : 3.5)),
+        sampler_name: process.env.NOVITA_SAMPLER ?? "Euler a",
+        seed: seed ?? -1,
+      },
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!submit.ok) throw new Error(`novita submit ${submit.status}: ${await submit.text()}`);
+  const taskId = (await submit.json())?.task_id;
+  if (!taskId) throw new Error("novita: no task_id");
+
+  // 2) 결과 폴링(task-result). SUCCEED면 image_url 반환, FAILED면 throw.
+  const deadline = Date.now() + Number(process.env.NOVITA_TIMEOUT_MS ?? 120_000);
+  for (;;) {
+    if (Date.now() > deadline) throw new Error("novita: poll timeout");
+    await new Promise((r) => setTimeout(r, 2_000));
+    const res = await fetch(`${base}/v3/async/task-result?task_id=${encodeURIComponent(taskId)}`, {
+      headers: auth,
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) continue; // 일시 오류는 재시도
+    const data = await res.json();
+    const status: string = data?.task?.status ?? "";
+    if (status.includes("FAILED")) throw new Error(`novita task failed: ${data?.task?.reason ?? ""}`);
+    const url = data?.images?.[0]?.image_url;
+    if (url) return { url }; // 임시 URL — 라우트가 즉시 fetch해 저장.
+  }
 }
