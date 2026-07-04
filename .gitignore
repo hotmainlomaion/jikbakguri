@@ -12,3 +12,7 @@ scratchpad/
 files.zip
 supabase/.branches
 supabase/.temp
+
+# Python
+__pycache__/
+*.pyc
