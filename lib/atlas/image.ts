@@ -276,10 +276,11 @@ async function generateNovita(prompt: string, style: ImageStyle, seed: number | 
   if (!taskId) throw new Error("novita: no task_id");
 
   // 2) 결과 폴링(task-result). SUCCEED면 image_url 반환, FAILED면 throw.
+  //    폴 간격을 짧게(700ms) 두어 생성 완료를 즉시 감지 → 체감 지연 축소(2s 간격 대비 평균 ~1s 절감).
   const deadline = Date.now() + Number(process.env.NOVITA_TIMEOUT_MS ?? 120_000);
   for (;;) {
     if (Date.now() > deadline) throw new Error("novita: poll timeout");
-    await new Promise((r) => setTimeout(r, 2_000));
+    await new Promise((r) => setTimeout(r, 700));
     const res = await fetch(`${base}/v3/async/task-result?task_id=${encodeURIComponent(taskId)}`, {
       headers: auth,
       signal: AbortSignal.timeout(15_000),
