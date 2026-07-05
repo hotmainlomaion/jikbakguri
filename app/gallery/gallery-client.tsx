@@ -7,6 +7,7 @@ import { CharacterCard, LockedCard, type CardBot } from "@/components/character-
 import { gradientFor } from "@/components/ui";
 import { IcSearch, IcChart } from "@/components/icons";
 import { CreditBadge, type WalletClient } from "@/components/credit-badge";
+import { AttendanceView } from "@/components/attendance-view";
 
 export type GalleryScenario = {
   id: string;
@@ -250,7 +251,10 @@ export function GalleryClient({
               </div>
               <RankingView bots={[...bots].sort((a, b) => b.rankScore - a.rankScore)} onSelect={onSelect} />
             </section>
-          ) : view === "collection" || view === "attendance" ? (
+          ) : view === "attendance" ? (
+            /* 출석 다이어리 — 매일 1회 출석 → 포인트 획득 */
+            <AttendanceView wallet={wallet} onWallet={setWallet} />
+          ) : view === "collection" ? (
             <EmptyState icon="🛠️" text="준비 중인 기능이에요." hint="곧 만나요!" />
           ) : (
             /* 홈 — 히어로 + 큐레이션 행 */
@@ -263,6 +267,19 @@ export function GalleryClient({
                 <p className="flex-1 truncate text-sm text-text">🏆 사용자 랭킹 오픈 안내</p>
                 <span className="text-xs text-subtle">5/5</span>
               </div>
+
+              {/* 출석 다이어리 진입(모바일 하단탭 미노출 보완) */}
+              <button
+                onClick={() => router.push("/gallery?view=attendance")}
+                className="mt-3 flex w-full items-center gap-3 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 text-left transition-colors hover:bg-primary/15"
+              >
+                <span className="text-xl">📅</span>
+                <span className="flex-1">
+                  <span className="block text-sm font-semibold text-text">출석 다이어리</span>
+                  <span className="block text-xs text-muted">매일 출석하고 포인트를 받아요</span>
+                </span>
+                <span className="text-sm font-bold text-primary">받기 →</span>
+              </button>
 
               {/* 카테고리 칩 */}
               <div className="mt-6">
