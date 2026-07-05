@@ -81,12 +81,13 @@ export function ChatUI({
   const [safeView, setSafeView] = useState(false);
   const [peekId, setPeekId] = useState<string | null>(null);
   const [recallShown, setRecallShown] = useState(!!recall);
-  const [kbInset, setKbInset] = useState(0);
+  // 컨테이너 높이를 '실제 보이는 영역'에 정확히 맞추기 위한 뷰포트 상태(아래 effect가 구동).
+  const [viewport, setViewport] = useState<{ height: number; top: number } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [msgs, busy, image, kbInset]);
+  }, [msgs, busy, image]);
 
   // F46 세이프뷰: 선택 지속(localStorage) + 흔들기(devicemotion) 즉시 발동.
   useEffect(() => {
@@ -112,20 +113,25 @@ export function ChatUI({
     });
   }
 
-  // iOS 소프트 키보드 대응(키보드 높이만큼 padding-bottom).
+  // 모바일 뷰포트 정합(iOS Safari·인앱브라우저·소프트 키보드).
+  // 100dvh는 (1)소프트 키보드를 반영하지 못하고 (2)하단 툴바 계산이 브라우저마다 어긋나
+  // 키보드가 없는데도 하단이 잘리거나 검은 여백이 생긴다. visualViewport.height는 툴바·키보드를
+  // 모두 제외한 '실제 보이는 높이'라, 이걸로 컨테이너 높이를 직접 구동한다. 키보드가 뜨며 페이지가
+  // 위로 밀리면 offsetTop만큼 translateY로 되돌려(고정 컨테이너) 항상 가시영역에 딱 맞춘다.
   useEffect(() => {
     const vv = window.visualViewport;
-    if (!vv) return;
-    const update = () => {
-      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-      setKbInset(inset > 60 ? inset : 0);
-    };
+    const update = () =>
+      setViewport(vv ? { height: vv.height, top: vv.offsetTop } : { height: window.innerHeight, top: 0 });
     update();
-    vv.addEventListener("resize", update);
-    vv.addEventListener("scroll", update);
+    vv?.addEventListener("resize", update);
+    vv?.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
+    window.addEventListener("orientationchange", update);
     return () => {
-      vv.removeEventListener("resize", update);
-      vv.removeEventListener("scroll", update);
+      vv?.removeEventListener("resize", update);
+      vv?.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+      window.removeEventListener("orientationchange", update);
     };
   }, []);
 
@@ -287,8 +293,12 @@ export function ChatUI({
 
   return (
     <div
-      className="flex h-[100dvh] overflow-hidden bg-bg"
-      style={kbInset ? { paddingBottom: kbInset } : undefined}
+      className="fixed inset-x-0 top-0 flex overflow-hidden bg-bg"
+      style={
+        viewport
+          ? { height: viewport.height, transform: viewport.top ? `translateY(${viewport.top}px)` : undefined }
+          : { height: "100dvh" }
+      }
     >
       <IconRail />
       <HistoryPanel history={history} active={sessionId} />
@@ -383,9 +393,10 @@ export function ChatUI({
             </button>
           </div>
 
-          {/* 메시지 + 입력 */}
-          <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex-1 space-y-4 overflow-y-auto px-3 py-5 sm:px-5">
+          {/* 메시지 + 입력. min-h-0 필수: 없으면 내부 메시지 영역이 콘텐츠만큼 늘어나
+              고정 컨테이너의 overflow-hidden에 잘려 스크롤이 죽는다(모바일 짤림 버그). */}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="flex-1 space-y-4 overflow-y-auto overscroll-contain px-3 py-5 sm:px-5">
               {/* #4 시나리오 인트로 카드 — 첫 AI 메시지 앞에 선택 시나리오 소개 */}
               {scenarioIntro && (
                 <div className="mx-auto max-w-md rounded-xl border border-primary/25 bg-gradient-to-br from-primary/10 to-surface2 p-4">
