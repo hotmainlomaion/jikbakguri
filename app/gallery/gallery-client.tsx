@@ -166,7 +166,7 @@ export function GalleryClient({
       <main className="flex-1 overflow-y-auto">
         {/* 상단바 */}
         <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-line bg-bg/90 px-3 py-3 backdrop-blur sm:gap-4 sm:px-6">
-          <div className="relative mx-auto flex w-full items-center sm:max-w-xl">
+          <div className="relative mx-auto flex min-w-0 flex-1 items-center sm:max-w-xl">
             <IcSearch className="pointer-events-none absolute left-3 h-4 w-4 text-subtle" />
             <input
               ref={searchRef}
@@ -191,7 +191,7 @@ export function GalleryClient({
               </kbd>
             )}
           </div>
-          <div className="flex items-center gap-1.5 sm:gap-3">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
             <button className="hidden items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-sm text-muted sm:flex">
               <IcChart className="h-4 w-4" /> 0
             </button>

@@ -37,10 +37,10 @@ export function CreditBadge({ wallet, onWallet }: { wallet: WalletClient; onWall
     <>
       <button
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 rounded-full bg-surface px-2.5 py-1 text-sm hover:bg-surface2"
+        className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-surface px-2.5 py-1 text-sm hover:bg-surface2"
         title={`멤버십 ${wallet.label} · 충전 보너스 ${wallet.bonusPct}%`}
       >
-        <span className={"rounded-full border px-1.5 py-0.5 text-[10px] font-bold " + (TIER_COLOR[wallet.tier] ?? "")}>
+        <span className={"whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[10px] font-bold " + (TIER_COLOR[wallet.tier] ?? "")}>
           {TIER_EMOJI[wallet.tier] ?? "🥉"} {wallet.label}
         </span>
         <span className="flex items-center gap-1 font-semibold text-gold">
