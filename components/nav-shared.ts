@@ -16,7 +16,7 @@ export type NavItem = { href: string; label: string; Icon: typeof IcHome };
 // 데스크톱 사이드바 전체(8항목).
 export const NAV: NavItem[] = [
   { href: "/gallery", label: "홈", Icon: IcHome },
-  { href: "/gallery?view=explore", label: "탐색", Icon: IcCompass },
+  { href: "/plots", label: "플롯", Icon: IcCompass },
   { href: "/gallery?view=ranking", label: "랭킹", Icon: IcCrown },
   { href: "/character", label: "만들기", Icon: IcSpark },
   { href: "/history", label: "내 채팅", Icon: IcChatBubble },
@@ -30,7 +30,7 @@ export const NAV: NavItem[] = [
 // TODO(운영주체 확인): 즐겨찾기/컬렉션/출석의 모바일 진입점(홈 내부 흡수 등).
 export const MOBILE_NAV: NavItem[] = [
   { href: "/gallery", label: "홈", Icon: IcHome },
-  { href: "/gallery?view=explore", label: "탐색", Icon: IcCompass },
+  { href: "/plots", label: "플롯", Icon: IcCompass },
   { href: "/character", label: "만들기", Icon: IcSpark },
   { href: "/history", label: "내 채팅", Icon: IcChatBubble },
   { href: "/settings", label: "설정", Icon: IcGear },
