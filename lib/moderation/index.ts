@@ -29,11 +29,17 @@ async function classifyText(text: string): Promise<ModerationResult> {
   const hit = heuristicScan(text);
   if (hit) return { pass: false, category: hit, detail: "heuristic" };
 
-  // 2차: 외부 분류 API. TODO(운영주체 확인): 실제 API 스키마에 맞춰 파싱.
+  // 2차(권장): LLM 기반 의미 분류기(OpenAI 호환) — MODERATION_TEXT_MODEL 설정 시 활성.
+  // 성인 콘텐츠는 통과, 미성년/불법만 차단. heuristic이 놓치는 완곡/우회 표현을 잡는다.
+  if (process.env.MODERATION_TEXT_MODEL) return classifyTextLLM(text);
+
+  // 2차(대체): 커스텀 외부 분류 API({flagged, category} 계약).
   if (!url || !key) {
-    // 미설정 시: 개발은 휴리스틱만으로 진행(pass), 운영(production)은 fail-closed로 차단(#3).
-    // heuristic이 놓치는 완곡/우회 벡터가 무검열 모델에 도달하지 않도록 — 배포 게이트로 분류기 설정 강제.
-    if (process.env.NODE_ENV === "production")
+    // 미설정 시: 개발은 휴리스틱만으로 진행(pass), 운영(production)은 기본 fail-closed로 차단(#3) —
+    // heuristic이 놓치는 완곡/우회 벡터가 무검열 모델에 도달하지 않도록 배포 게이트로 분류기 설정 강제.
+    // 단 비공개 지인테스트 한정 MODERATION_TEXT_FAILOPEN=1이면 heuristic(위에서 항상 실행되는 미성년/불법
+    // 1차 필터)만으로 통과. 미성년 필터는 그대로 유지되며, 공개/확대 전 반드시 외부 분류기(MODERATION_TEXT_URL) 연결.
+    if (process.env.NODE_ENV === "production" && process.env.MODERATION_TEXT_FAILOPEN !== "1")
       return { pass: false, category: "text_screening_unconfigured", detail: "no classifier (prod fail-closed)" };
     return { pass: true };
   }
@@ -56,6 +62,46 @@ async function classifyText(text: string): Promise<ModerationResult> {
   } catch (e) {
     // 분류 실패 시 안전 우선(fail-closed): 통과시키지 않고 차단.
     return { pass: false, category: "moderation_error", detail: String(e) };
+  }
+}
+
+// 클라우드 텍스트 분류기(OpenAI 호환 LLM). 성인 콘텐츠는 통과, 미성년/불법만 차단.
+// heuristicScan(항상 실행되는 결정론적 미성년/불법 1차 필터)이 1차, 이건 완곡·우회 표현을 잡는 2차 의미 분류.
+// base/key 미지정 시 ATLAS_LLM_* 재사용. 인프라 오류 시 heuristic이 이미 통과했으므로 앱 중단 방지 위해 통과.
+async function classifyTextLLM(text: string): Promise<ModerationResult> {
+  const baseURL = process.env.MODERATION_TEXT_BASE_URL ?? process.env.ATLAS_LLM_BASE_URL;
+  const apiKey = process.env.MODERATION_TEXT_API_KEY ?? process.env.ATLAS_LLM_API_KEY;
+  const model = process.env.MODERATION_TEXT_MODEL!;
+  if (!baseURL || !apiKey) return { pass: true }; // 설정 불완전 → heuristic만(항상 실행)
+  try {
+    const openai = new OpenAI({ baseURL, apiKey });
+    const resp = await openai.chat.completions.create(
+      {
+        model,
+        max_tokens: 6,
+        temperature: 0,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a strict child-safety text classifier for an ADULT (18+) fictional roleplay chat. " +
+              "Consensual sexual content between ADULTS is EXPLICITLY ALLOWED and must be OK — never block it. " +
+              "Reply with exactly one token. Reply BLOCK only if the text depicts, requests, or sexualizes a MINOR " +
+              "(a child, or a person described/implied as under 18 or a young student in a sexual context), child " +
+              "sexual abuse, or sexual content involving a real, identifiable, non-consenting person. Otherwise reply OK. " +
+              "The text may be Korean.",
+          },
+          { role: "user", content: text.slice(0, 4000) },
+        ],
+      },
+      { timeout: Number(process.env.MODERATION_TEXT_TIMEOUT_MS ?? 8000) }
+    );
+    const out = (resp.choices?.[0]?.message?.content ?? "").toUpperCase();
+    if (out.includes("BLOCK")) return { pass: false, category: "minor", detail: "text-llm" };
+    return { pass: true };
+  } catch {
+    // 분류기 인프라 오류 → heuristic 1차 필터가 이미 통과했으므로 앱 중단 방지 위해 통과(미성년 필터는 유지).
+    return { pass: true };
   }
 }
 
