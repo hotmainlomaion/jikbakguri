@@ -11,7 +11,6 @@ import {
   IcImage,
   IcGear,
   IcBack,
-  IcCoin,
   IcChart,
   IcRefresh,
   IcPlus,
@@ -20,12 +19,14 @@ import {
 } from "@/components/icons";
 import { ProfileImage, ProfileDetails, type ProfileBot } from "@/components/profile-panel";
 import { MobileProfileSheet } from "@/components/mobile-profile-sheet";
+import { CreditBadge, type WalletClient } from "@/components/credit-badge";
 
-type Msg = { id?: string; role: "user" | "assistant"; content: string; imageUrl?: string; selfie?: boolean };
+type Msg = { id?: string; role: "user" | "assistant"; content: string; imageUrl?: string; selfie?: boolean; kind?: string };
 type Bot = ProfileBot;
-type Hist = { id: string; name: string; lastActive: string };
+type Hist = { id: string; name: string; lastActive: string; avatar?: string | null };
 type Mood = { state: string; intensity: number; label: string; emoji: string };
-type Relationship = { intimacy: number; stage: string; label: string; emoji: string; progress: number };
+type Relationship = { intimacy: number; stage: string; label: string; emoji: string; progress: number; level: number };
+type Suggestion = { text: string; crowns: number };
 type Recall = { daysSince: number; firstMetLabel: string; messageCount: number; imageUrl: string | null };
 
 const BLOCK_MSG: Record<string, string> = {
@@ -33,30 +34,34 @@ const BLOCK_MSG: Record<string, string> = {
   blocked_output: "생성된 응답이 안전 정책에 의해 차단되었습니다.",
   rate_limited: "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
   daily_limit: "오늘 이미지 생성 한도를 초과했습니다.",
+  insufficient_credits: "크레딧이 부족해요. 상단 잔액을 눌러 충전해 주세요.",
   ai_unavailable: "AI 서비스에 일시적으로 연결할 수 없습니다.",
 };
 
 // F32 오프너 빠른 답장 칩(성인 톤, 노골 아님 — 탭하면 그대로 전송).
-const OPENER_CHIPS = ["응, 나도 보고 싶었어", "무슨 생각 하고 있었어?", "가까이 와서 얘기하자"];
 
 export function ChatUI({
   sessionId,
   bot,
   scenarioTitle,
+  scenarioIntro,
   initial,
   mood: initialMood,
   relationship: initialRel,
   recall,
   history,
+  wallet: initialWallet,
 }: {
   sessionId: string;
   bot: Bot;
   scenarioTitle: string | null;
+  scenarioIntro?: { title: string; detail: string | null; tags: string[]; intensity: number } | null;
   initial: Msg[];
   mood: Mood;
   relationship: Relationship;
   recall: Recall | null;
   history: Hist[];
+  wallet: WalletClient;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>(initial);
   const [input, setInput] = useState("");
@@ -65,10 +70,13 @@ export function ChatUI({
   const [image, setImage] = useState<string | null>(null);
   const [mood, setMood] = useState<Mood>(initialMood);
   const [rel, setRel] = useState<Relationship>(initialRel);
+  const [wallet, setWallet] = useState<WalletClient>(initialWallet);
   const [stageUp, setStageUp] = useState<string | null>(null);
   const [tab, setTab] = useState<"daily" | "flutter">("daily");
   const [sheet, setSheet] = useState<null | "profile">(null);
   const [studio, setStudio] = useState(false);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]); // 맥락 반영 추천 답장(왕관 게임)
+  const [pointFlash, setPointFlash] = useState<string | null>(null); // 게임: 이번 턴 획득 포인트 '+N' 플래시
   const [pendingSelfie, setPendingSelfie] = useState<string | null>(null);
   const [safeView, setSafeView] = useState(false);
   const [peekId, setPeekId] = useState<string | null>(null);
@@ -125,38 +133,92 @@ export function ChatUI({
     setNotice(BLOCK_MSG[code ?? ""] ?? "요청을 처리하지 못했습니다.");
   }
 
-  // F32: 오프닝 상태 = 봇 인사만 있고 아직 사용자 발화 없음.
-  const isOpening = msgs.length <= 1 && !msgs.some((m) => m.role === "user");
+  // 맥락 반영 추천 답장 갱신(best-effort, 비동기 — 응답을 막지 않음).
+  async function fetchSuggestions() {
+    try {
+      const res = await fetch("/api/suggest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (Array.isArray(data.suggestions))
+        setSuggestions(
+          data.suggestions
+            .map((s: any) => (typeof s === "string" ? { text: s, crowns: 0 } : { text: String(s?.text ?? ""), crowns: Number(s?.crowns) || 0 }))
+            .filter((s: Suggestion) => s.text)
+        );
+    } catch {}
+  }
+  // 진입 시 1회: 현재까지 대화(오프닝 포함)를 반영한 추천 로드.
+  useEffect(() => {
+    fetchSuggestions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  async function sendText(text: string) {
+  // F32: 오프닝 상태 = 봇 인사만 있고 아직 사용자 발화 없음.
+
+  async function sendText(text: string, crowns = 0) {
     const t = text.trim();
     if (!t || busy) return;
     setInput("");
     setNotice(null);
     setMsgs((m) => [...m, { role: "user", content: t }]);
+    setSuggestions([]); // 이전 추천 즉시 숨김(응답 후 새 맥락으로 갱신)
     setBusy("chat");
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId, message: t }),
+      body: JSON.stringify({ sessionId, message: t, crowns }), // 왕관 보너스 포인트
     });
     const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setBusy(null);
+      return err(data.error);
+    }
+    // #3 장면 전환 카드: 이동 감지 시 사용자 말풍선 뒤·AI 응답 앞에 작은 지문 카드를 먼저 노출.
+    if (data.sceneCard?.content) {
+      setMsgs((m) => [...m, { id: data.sceneCard.id ?? undefined, role: "assistant", content: data.sceneCard.content, kind: "scene" }]);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    // 카톡식 순차 말풍선: 첫 통은 바로, 이후는 타이핑 지연을 두고 하나씩(사람이 여러 번 보내는 느낌).
+    // busy를 유지해 사이사이 "입력 중" 인디케이터가 보이게 한다.
+    const bubbles: string[] =
+      Array.isArray(data.bubbles) && data.bubbles.length ? data.bubbles : [data.reply].filter(Boolean);
+    for (let i = 0; i < bubbles.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, Math.min(1500, 450 + bubbles[i].length * 20)));
+      setMsgs((m) => [...m, { role: "assistant", content: bubbles[i] }]);
+    }
     setBusy(null);
-    if (!res.ok) return err(data.error);
-    setMsgs((m) => [...m, { role: "assistant", content: data.reply }]);
     if (data.mood) setMood((prev) => ({ ...prev, ...data.mood })); // F12 감정 갱신
-    // F10 관계 단계/친밀도 갱신 + 단계업 알림.
+    // F10 관계 단계/친밀도 갱신 + 레벨업 알림 + 게임 포인트 플래시.
     if (data.relationship) {
       const r = data.relationship;
-      setRel((prev) => ({ ...prev, intimacy: r.intimacy, stage: r.stage, label: r.label, emoji: r.emoji, progress: r.progress ?? prev.progress }));
+      setRel((prev) => ({
+        ...prev,
+        intimacy: r.intimacy,
+        stage: r.stage,
+        label: r.label,
+        emoji: r.emoji,
+        progress: r.progress ?? prev.progress,
+        level: r.level ?? prev.level,
+      }));
+      if (r.gained > 0) {
+        setPointFlash(`+${r.gained}${crowns > 0 ? " 👑" : ""}`); // 획득 포인트 플래시
+        setTimeout(() => setPointFlash(null), 1400);
+      }
       if (r.stageUp) {
-        setStageUp(`${r.emoji} 관계가 «${r.label}» 단계로 깊어졌어요`);
+        setStageUp(`🎉 Lv.${r.level} «${r.label}» ${r.emoji} 로 관계 레벨업!`);
         setTimeout(() => setStageUp(null), 5000);
       }
     }
+    // 크레딧 차감 반영(무제한 계정은 balance=-1로 넘어와 갱신 안 함).
+    if (data.credits && !data.credits.unlimited && data.credits.balance >= 0)
+      setWallet((w) => ({ ...w, balance: data.credits.balance }));
     // F20 인챗 셀피(#7): 자동 생성 대신 확인 칩을 띄운다 — 사용자가 탭할 때만 생성해
     // 일일 한도를 임의 소모하지 않게 한다.
     if (data.selfie) setPendingSelfie(data.selfie);
+    fetchSuggestions(); // 새 맥락 기반 추천 답장 갱신
   }
   const send = () => sendText(input);
 
@@ -183,6 +245,30 @@ export function ChatUI({
       ...m,
       { role: "assistant", content: "", imageUrl: data.url, selfie: opts?.asSelfie },
     ]);
+    if (data.credits && !data.credits.unlimited && data.credits.balance >= 0)
+      setWallet((w) => ({ ...w, balance: data.credits.balance }));
+  }
+
+  // 지금 장면 이미지 — 최근 대화(마지막 지시/내용)를 반영해 생성. 캐릭터 일관성은 서버가 identity+seed로 유지.
+  async function runSceneImage() {
+    if (busy) return;
+    setNotice(null);
+    setBusy("image");
+    const res = await fetch("/api/image", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId, mode: "scene" }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(null);
+    if (!res.ok) {
+      if (data.error === "no_context") return setNotice("대화를 조금 더 나눈 뒤 장면을 그릴 수 있어요.");
+      return err(data.error);
+    }
+    setImage(data.url);
+    setMsgs((m) => [...m, { role: "assistant", content: "", imageUrl: data.url }]);
+    if (data.credits && !data.credits.unlimited && data.credits.balance >= 0)
+      setWallet((w) => ({ ...w, balance: data.credits.balance }));
   }
 
   async function report() {
@@ -213,14 +299,14 @@ export function ChatUI({
           <Link href="/gallery" className="-m-2 p-2 text-muted hover:text-text">
             <IcBack />
           </Link>
-          <Avatar name={bot.name} size={32} />
+          <Avatar name={bot.name} size={32} src={bot.avatarUrl} />
           <div className="min-w-0">
             <p className="truncate font-semibold text-text">{bot.name}</p>
             {scenarioTitle && <p className="truncate text-[11px] text-subtle">{scenarioTitle}</p>}
           </div>
           <div className="ml-auto flex items-center gap-2">
             {/* F10 관계 단계 배지 + 친밀도 게이지 */}
-            <RelationshipBadge rel={rel} />
+            <RelationshipBadge rel={rel} flash={pointFlash} />
             {/* F12 감정 칩 — 평온이 아니면 노출 */}
             <MoodChip mood={mood} />
             {/* F46 세이프뷰 토글 */}
@@ -235,16 +321,14 @@ export function ChatUI({
             >
               {safeView ? "🙈" : "👁️"}
             </button>
-            <span className="hidden items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-gold sm:flex">
-              <IcCoin className="h-3.5 w-3.5" /> 1,900
-            </span>
+            <CreditBadge wallet={wallet} onWallet={setWallet} />
             {/* 모바일: 프로필 시트 열기 */}
             <button
               onClick={() => setSheet("profile")}
               className="-m-1 rounded-full p-1 text-muted hover:text-text lg:hidden"
               aria-label="프로필"
             >
-              <Avatar name={bot.name} size={28} />
+              <Avatar name={bot.name} size={28} src={bot.avatarUrl} />
             </button>
           </div>
         </header>
@@ -302,11 +386,32 @@ export function ChatUI({
           {/* 메시지 + 입력 */}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex-1 space-y-4 overflow-y-auto px-3 py-5 sm:px-5">
+              {/* #4 시나리오 인트로 카드 — 첫 AI 메시지 앞에 선택 시나리오 소개 */}
+              {scenarioIntro && (
+                <div className="mx-auto max-w-md rounded-xl border border-primary/25 bg-gradient-to-br from-primary/10 to-surface2 p-4">
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <span className="rounded-md bg-primary/20 px-1.5 py-0.5 text-[10px] font-semibold text-primary">시나리오</span>
+                    <span className="text-sm font-bold text-text">{scenarioIntro.title}</span>
+                    <span className="text-xs text-danger">{"🔥".repeat(Math.max(1, Math.min(3, scenarioIntro.intensity)))}</span>
+                  </div>
+                  {scenarioIntro.detail && (
+                    <p className="text-[13px] leading-relaxed text-muted">{scenarioIntro.detail}</p>
+                  )}
+                  {!!scenarioIntro.tags?.length && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {scenarioIntro.tags.slice(0, 5).map((t) => (
+                        <span key={t} className="rounded-full bg-primary/12 px-2 py-0.5 text-[10px] font-medium text-primary">#{t}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {/* F09 오늘의 회상 카드 */}
               {recall && recallShown && (
                 <RecallCard
                   recall={recall}
                   botName={bot.name}
+                  botAvatar={bot.avatarUrl}
                   safeView={safeView}
                   onClose={() => setRecallShown(false)}
                 />
@@ -316,6 +421,7 @@ export function ChatUI({
                   key={m.id ?? i}
                   msg={m}
                   botName={bot.name}
+                  botAvatar={bot.avatarUrl}
                   safeView={safeView}
                   peek={peekId === String(i)}
                   onPeekStart={() => safeView && m.imageUrl && setPeekId(String(i))}
@@ -324,7 +430,7 @@ export function ChatUI({
               ))}
               {busy && (
                 <div className="flex items-center gap-2">
-                  <Avatar name={bot.name} size={28} />
+                  <Avatar name={bot.name} size={28} src={bot.avatarUrl} />
                   <div className="rounded-2xl rounded-tl-sm bg-surface2 px-4 py-2 text-sm text-muted">
                     <span className="inline-flex gap-1">
                       {busy === "image" ? "이미지 생성 중…" : "입력 중"}
@@ -362,16 +468,24 @@ export function ChatUI({
               </div>
             )}
 
-            {/* F32 오프너 빠른 답장 칩 */}
-            {isOpening && !busy && (
-              <div className="no-scrollbar flex gap-2 overflow-x-auto px-3 pb-1 sm:px-5">
-                {OPENER_CHIPS.map((c) => (
+            {/* 맥락 반영 추천 답장 — 왕관(👑) 답장은 레벨업 포인트를 더 줌(게임 요소) */}
+            {suggestions.length > 0 && !busy && (
+              <div className="no-scrollbar flex items-center gap-2 overflow-x-auto px-3 pb-1 sm:px-5">
+                <span className="shrink-0 text-[11px] text-subtle">추천</span>
+                {suggestions.map((s, i) => (
                   <button
-                    key={c}
-                    onClick={() => sendText(c)}
-                    className="shrink-0 rounded-full border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/20"
+                    key={s.text + i}
+                    onClick={() => sendText(s.text, s.crowns)}
+                    title={s.crowns > 0 ? `왕관 ${s.crowns}개 · 레벨업 포인트 +${s.crowns * 4}` : undefined}
+                    className={
+                      "shrink-0 rounded-full border px-3 py-1.5 text-xs " +
+                      (s.crowns > 0
+                        ? "border-gold/50 bg-gold/10 text-gold hover:bg-gold/20"
+                        : "border-primary/40 bg-primary/10 text-primary hover:bg-primary/20")
+                    }
                   >
-                    {c}
+                    {s.crowns > 0 && <span className="mr-1">{"👑".repeat(s.crowns)}</span>}
+                    {s.text}
                   </button>
                 ))}
               </div>
@@ -409,9 +523,9 @@ export function ChatUI({
               </div>
               <div className="flex items-end gap-2">
                 <button
-                  onClick={() => setStudio(true)}
+                  onClick={runSceneImage}
                   disabled={!!busy}
-                  title="변형 스튜디오"
+                  title="지금 장면 이미지 — 최근 대화를 반영해 그려요"
                   className="btn-ghost shrink-0 !px-2.5"
                 >
                   <IcImage className="h-5 w-5" />
@@ -473,21 +587,27 @@ export function ChatUI({
   );
 }
 
-// F10 관계 단계 배지 + 친밀도 게이지.
-function RelationshipBadge({ rel }: { rel: Relationship }) {
+// F10 관계 레벨 배지(게임화: Lv.N) + 친밀도 게이지 + 획득 포인트 플래시.
+function RelationshipBadge({ rel, flash }: { rel: Relationship; flash?: string | null }) {
   return (
     <span
-      title={`관계: ${rel.label} · 친밀도 ${rel.intimacy}/100`}
-      className="flex items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs text-muted"
+      title={`관계 Lv.${rel.level} ${rel.label} · 친밀도 ${rel.intimacy}/100`}
+      className="relative flex items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs text-muted"
     >
       <span className="text-sm leading-none">{rel.emoji}</span>
+      <span className="font-semibold text-gold">Lv.{rel.level}</span>
       <span className="hidden sm:inline">{rel.label}</span>
       <span className="h-1.5 w-8 overflow-hidden rounded-full bg-surface3">
         <span
-          className="block h-full rounded-full bg-danger"
+          className="block h-full rounded-full bg-danger transition-[width] duration-500"
           style={{ width: `${Math.min(100, Math.max(6, rel.progress))}%` }}
         />
       </span>
+      {flash && (
+        <span className="pointer-events-none absolute -top-4 right-1 animate-fadeIn text-[11px] font-bold text-gold">
+          {flash}
+        </span>
+      )}
     </span>
   );
 }
@@ -519,11 +639,13 @@ function bot_moodTitle(mood: Mood) {
 function RecallCard({
   recall,
   botName,
+  botAvatar,
   safeView,
   onClose,
 }: {
   recall: Recall;
   botName: string;
+  botAvatar?: string | null;
   safeView: boolean;
   onClose: () => void;
 }) {
@@ -548,7 +670,7 @@ function RecallCard({
             }
           />
         ) : (
-          <Avatar name={botName} size={56} />
+          <Avatar name={botName} size={56} src={botAvatar} />
         )}
         <div className="min-w-0 text-sm">
           <p className="font-medium text-text">{recall.firstMetLabel}</p>
@@ -564,6 +686,7 @@ function RecallCard({
 function MessageRow({
   msg,
   botName,
+  botAvatar,
   safeView,
   peek,
   onPeekStart,
@@ -571,17 +694,29 @@ function MessageRow({
 }: {
   msg: Msg;
   botName: string;
+  botAvatar?: string | null;
   safeView: boolean;
   peek: boolean;
   onPeekStart: () => void;
   onPeekEnd: () => void;
 }) {
+  // #3 장면 전환 지문 — 별도의 작은 사각형 카드로 렌더(대사 말풍선과 구분).
+  if (msg.kind === "scene") {
+    return (
+      <div className="my-1 flex justify-center">
+        <div className="max-w-[80%] rounded-lg border border-line/60 bg-surface2/60 px-3.5 py-2 text-center text-[12.5px] italic leading-relaxed text-muted">
+          <span className="mr-1 not-italic opacity-70">🎬</span>
+          {msg.content}
+        </div>
+      </div>
+    );
+  }
   // 이미지 메시지(생성 이미지 / 셀카) 렌더.
   if (msg.imageUrl) {
     const blurred = safeView && !peek;
     return (
       <div className="flex gap-2">
-        <Avatar name={botName} size={28} />
+        <Avatar name={botName} size={28} src={botAvatar} />
         <div className="min-w-0">
           {msg.selfie && <p className="mb-1 text-xs text-primary">📷 {botName}가 셀카를 보냈어요</p>}
           <div className="relative w-56 max-w-[70%] overflow-hidden rounded-2xl rounded-tl-sm">
@@ -620,13 +755,20 @@ function MessageRow({
       <p className="px-3 text-center text-[13px] italic leading-relaxed text-muted sm:px-6">{msg.content}</p>
     );
   }
+  // 오프닝 배경 지시문: 선행 (…) 한 줄 + 빈 줄 뒤 대사 → 지문은 이탤릭 지문 줄로 분리 렌더.
+  const introMatch = msg.content.match(/^\s*(\([^\n]{4,}\))\s*\n+([\s\S]+)$/);
+  const intro = introMatch ? introMatch[1] : null;
+  const body = introMatch ? introMatch[2].trim() : msg.content;
   return (
     <div className="flex gap-2">
-      <Avatar name={botName} size={28} />
+      <Avatar name={botName} size={28} src={botAvatar} />
       <div className="min-w-0">
         <p className="mb-1 text-xs text-subtle">{botName}</p>
+        {intro && (
+          <p className="mb-1.5 max-w-[85%] text-[13px] italic leading-relaxed text-muted">{intro}</p>
+        )}
         <div className="max-w-[80%] break-words rounded-2xl rounded-tl-sm bg-surface2 px-4 py-2.5 text-sm text-text sm:max-w-[85%]">
-          {msg.content}
+          {body}
         </div>
       </div>
     </div>
@@ -742,8 +884,8 @@ function IconRail() {
   ];
   return (
     <nav className="hidden w-16 shrink-0 flex-col items-center gap-1 border-r border-line bg-bg2 py-4 xl:flex">
-      <Link href="/gallery" className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-danger text-sm font-black text-white">
-        T
+      <Link href="/gallery" title="홈" className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-danger text-white">
+        <IcHome className="h-5 w-5" />
       </Link>
       {items.map(({ Icon, href }, i) => (
         <Link key={i} href={href} className="nav-rail-item">
@@ -775,7 +917,7 @@ function HistoryPanel({ history, active }: { history: Hist[]; active: string }) 
               (h.id === active ? "bg-surface" : "hover:bg-surface")
             }
           >
-            <Avatar name={h.name} size={38} />
+            <Avatar name={h.name} size={38} src={h.avatar} />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-text">{h.name}</p>
               <p className="truncate text-[11px] text-subtle">

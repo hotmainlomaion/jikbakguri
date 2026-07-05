@@ -4,10 +4,10 @@
 export function Logo({ className = "" }: { className?: string }) {
   return (
     <div className={"flex items-center gap-1.5 " + className}>
-      <span className="text-xl font-extrabold tracking-tight text-white">TOPTOON</span>
       <span className="rounded bg-danger px-1 py-0.5 text-[10px] font-extrabold leading-none text-white">
-        CHAT
+        19
       </span>
+      <span className="text-xl font-extrabold tracking-tight text-white">직박구리</span>
     </div>
   );
 }
@@ -23,11 +23,25 @@ export function Avatar({
   name,
   size = 40,
   rounded = "rounded-full",
+  src,
 }: {
   name: string;
   size?: number;
   rounded?: string;
+  src?: string | null;
 }) {
+  // 대표컷(얼굴)이 있으면 이미지로, 없으면 이니셜 그라데이션 폴백.
+  if (src) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={src}
+        alt={name}
+        className={"shrink-0 object-cover " + rounded}
+        style={{ width: size, height: size }}
+      />
+    );
+  }
   return (
     <div
       className={"flex shrink-0 items-center justify-center font-bold text-white/85 " + rounded}

@@ -32,7 +32,8 @@ const KOREAN_BEAUTY =
 function buildPrompt(desc, style) {
   return style === "anime"
     ? `${desc}, upper body, looking at viewer, solo`
-    : `${desc}, upper body portrait, looking at camera, ${KOREAN_BEAUTY}`;
+    // 실사 아바타는 갤러리 브라우즈용 → 옷 입은 상태 명시(Lustify NSFW 모델이 노출로 흐르지 않게).
+    : `solo, one woman, fully clothed, tasteful, ${desc}, upper body portrait, looking at camera, ${KOREAN_BEAUTY}`;
 }
 
 for (const name of names) {
@@ -60,9 +61,11 @@ for (const name of names) {
   const up = await supa.storage.from(BUCKET).upload(path, bytes, { contentType: "image/png", upsert: true });
   if (up.error) { console.error(`[${name}] upload err: ${up.error.message}`); continue; }
 
-  // 기존 avatar primary 해제 후 새 대표 업서트(approved).
+  // 기존 avatar primary 해제 후 새 대표 반영. 경로가 고정(avatars/<id>.png)이라 재생성 시
+  // 동일 storage_path 행이 이미 있으므로 insert는 uniq_charimg_path와 충돌 → upsert(onConflict)로
+  // 기존 행을 갱신(byte_size·primary·approved)한다. 최초 생성이면 insert처럼 동작.
   await supa.from("character_images").update({ is_primary: false }).eq("bot_profile_id", bot.id).eq("category", "avatar");
-  const { error: insErr } = await supa.from("character_images").insert({
+  const { error: insErr } = await supa.from("character_images").upsert({
     bot_profile_id: bot.id,
     category: "avatar",
     storage_path: path,
@@ -70,7 +73,7 @@ for (const name of names) {
     byte_size: bytes.length,
     is_primary: true,
     review_status: "approved",
-  });
+  }, { onConflict: "storage_path" });
   if (insErr) { console.error(`[${name}] db err: ${insErr.message}`); continue; }
   console.error(`[${name}] ✅ avatar set (${bytes.length}B)`);
 }

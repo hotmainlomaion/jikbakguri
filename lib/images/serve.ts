@@ -47,6 +47,36 @@ export async function signAvatars(botIds: string[], ttl = AVATAR_TTL): Promise<M
   return out;
 }
 
+// 여러 봇의 히어로 배너(와이드) 서명URL 배치 발급 → Map<botId, url>. 없으면 미포함(호출부에서 아바타 폴백).
+export async function signHeroes(botIds: string[], ttl = AVATAR_TTL): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!botIds.length) return out;
+  const admin = createAdminClient();
+
+  const { data } = await admin
+    .from("character_images")
+    .select("bot_profile_id, storage_path, bot_profiles!inner(is_published)")
+    .in("bot_profile_id", botIds)
+    .eq("category", "hero")
+    .eq("is_primary", true)
+    .eq("review_status", "approved")
+    .eq("bot_profiles.is_published", true);
+
+  const rows = (data ?? []) as any[];
+  if (!rows.length) return out;
+
+  const paths = rows.map((r) => r.storage_path);
+  const { data: signed } = await admin.storage.from(BUCKET).createSignedUrls(paths, ttl);
+  const pathToUrl = new Map<string, string>();
+  for (const s of signed ?? []) if (s.signedUrl) pathToUrl.set(s.path!, s.signedUrl);
+
+  for (const r of rows) {
+    const url = pathToUrl.get(r.storage_path);
+    if (url) out.set(r.bot_profile_id, url);
+  }
+  return out;
+}
+
 // 단일 봇의 프로필 미디어: 대표 아바타 URL + 컬렉션 location별 approved 개수.
 export async function getProfileMedia(
   botId: string

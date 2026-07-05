@@ -22,8 +22,15 @@ export async function checkChatRate(userId: string): Promise<boolean> {
 // 조건부 원자 증가로 동시 요청 TOCTOU도 제거된다. 생성 전에 호출해 예약할 것.
 // 반환 true=예약 성공(진행), false=한도 도달(차단).
 export async function reserveImageQuota(userId: string): Promise<boolean> {
-  const limit = Number(process.env.DAILY_IMAGE_LIMIT ?? 5);
   const admin = createAdminClient();
+  // 무제한 화이트리스트(데모/테스트 계정) — 프로덕션 사용자엔 무영향. IMAGE_UNLIMITED_EMAILS=a@x,b@y.
+  const unlimited = (process.env.IMAGE_UNLIMITED_EMAILS ?? "")
+    .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (unlimited.length) {
+    const { data: u } = await admin.from("users").select("email").eq("id", userId).maybeSingle();
+    if (u?.email && unlimited.includes(u.email.toLowerCase())) return true; // 상한 소모 없이 통과
+  }
+  const limit = Number(process.env.DAILY_IMAGE_LIMIT ?? 5);
   const { data, error } = await admin.rpc("consume_image_quota", { p_user: userId, p_limit: limit });
   if (error) return false; // 예약 실패 시 fail-closed(차단)
   return data === true;

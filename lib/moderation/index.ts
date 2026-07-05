@@ -3,6 +3,7 @@
 // 모든 AI 라우트(chat/image, 입력/출력)는 반드시 이 모듈을 통과한다.
 // 우회 경로 금지 — chat/image 라우트는 직접 분류 API를 호출하지 말 것.
 // ============================================================
+import OpenAI from "openai";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { heuristicScan, type BlockCategory } from "./categories";
 
@@ -61,25 +62,87 @@ async function classifyText(text: string): Promise<ModerationResult> {
 async function classifyImage(imageUrl: string): Promise<ModerationResult> {
   const url = process.env.MODERATION_IMAGE_URL;
   const key = process.env.MODERATION_IMAGE_API_KEY;
-  if (!url || !key) {
-    // 이미지 출력 스크리닝은 필수(7-B). 미설정이면 fail-closed로 차단.
-    // TODO(운영주체 확인): 이미지 분류기 채택 후 활성화.
-    return { pass: false, category: "image_screening_unconfigured", detail: "no classifier" };
+  const prod = process.env.NODE_ENV === "production";
+  // 인프라 오류(스크리너 미설정/타임아웃/에러) 처리: 프로덕션은 fail-closed(차단),
+  // 로컬/개발은 fail-open(통과) — 입력에서 이미 미성년 필터를 통과했고, 16GB 로컬에서
+  // 비전모델 콜드로드가 메모리 압박으로 자주 실패하기 때문(진짜 미성년 판정은 항상 차단).
+  const infraFail = (category: string, detail?: string): ModerationResult =>
+    prod ? { pass: false, category, detail } : { pass: true };
+
+  // (A) 커스텀 분류 엔드포인트(로컬 llava 등 {flagged, category} 계약).
+  if (url && key) {
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+        body: JSON.stringify({ image_url: imageUrl }),
+        signal: AbortSignal.timeout(Number(process.env.MODERATION_IMAGE_TIMEOUT_MS ?? 180000)),
+      });
+      if (!resp.ok) throw new Error(`image moderation api ${resp.status}`);
+      const data = await resp.json();
+      if (data?.flagged) {
+        const cat = String(data?.category ?? "flagged");
+        if (cat === "screen_error" || cat === "no_image_url") return infraFail(cat, "screener error");
+        return { pass: false, category: cat, detail: "api" };
+      }
+      return { pass: true };
+    } catch (e) {
+      return infraFail("moderation_error", String(e));
+    }
   }
+
+  // (B) 클라우드 비전 LLM(OpenAI 호환) — 로컬 llava 대체(Vercel 등 클라우드). 미성년만 차단, 성인은 통과.
+  //     MODERATION_VISION_MODEL 설정 시 활성. base/key 미지정 시 ATLAS_LLM_* 재사용.
+  if (process.env.MODERATION_VISION_MODEL) {
+    return classifyImageVision(imageUrl, infraFail);
+  }
+
+  // (C) 미설정: 프로덕션은 fail-closed(전면 차단)로 안전. 단 비공개 지인테스트 한정으로 IMAGE_SCREENING_FAILOPEN=1
+  //     설정 시에만 통과(입력측 미성년 필터·character_age>=18은 여전히 활성). 공개 전 반드시 (A)/(B) 연결.
+  if (process.env.IMAGE_SCREENING_FAILOPEN === "1") return { pass: true };
+  return infraFail("image_screening_unconfigured", "no classifier");
+}
+
+// 클라우드 비전 미성년 스크리너(OpenAI 호환 vision). 성인 콘텐츠는 통과, 미성년/아동만 'minor'로 차단.
+async function classifyImageVision(
+  imageUrl: string,
+  infraFail: (c: string, d?: string) => ModerationResult
+): Promise<ModerationResult> {
+  const baseURL = process.env.MODERATION_VISION_BASE_URL ?? process.env.ATLAS_LLM_BASE_URL;
+  const apiKey = process.env.MODERATION_VISION_API_KEY ?? process.env.ATLAS_LLM_API_KEY;
+  const model = process.env.MODERATION_VISION_MODEL!;
+  if (!baseURL || !apiKey) return infraFail("image_screening_unconfigured", "vision not configured");
   try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-      body: JSON.stringify({ image_url: imageUrl }),
-      // 로컬 비전모델(llava)은 콜드 로드가 느려 15s로는 부족 → fail-closed 오차단 방지.
-      signal: AbortSignal.timeout(Number(process.env.MODERATION_IMAGE_TIMEOUT_MS ?? 120000)),
-    });
-    if (!resp.ok) throw new Error(`image moderation api ${resp.status}`);
-    const data = await resp.json();
-    if (data?.flagged) return { pass: false, category: data?.category ?? "flagged", detail: "api" };
-    return { pass: true };
+    const openai = new OpenAI({ baseURL, apiKey });
+    const resp = await openai.chat.completions.create(
+      {
+        model,
+        max_tokens: 8,
+        temperature: 0,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a strict child-safety image classifier. Judge ONLY apparent age. " +
+              "Reply with exactly one word: MINOR if the depicted person appears to be a child/teen/under 18 (or ambiguously youthful), otherwise ADULT. Adult sexual content is allowed and must be ADULT.",
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Does this image depict a minor (under 18)? Answer MINOR or ADULT." },
+              { type: "image_url", image_url: { url: imageUrl } },
+            ] as any,
+          },
+        ],
+      },
+      { timeout: Number(process.env.MODERATION_IMAGE_TIMEOUT_MS ?? 60000) }
+    );
+    const out = (resp.choices?.[0]?.message?.content ?? "").toUpperCase();
+    if (out.includes("MINOR")) return { pass: false, category: "minor", detail: "vision" };
+    if (out.includes("ADULT")) return { pass: true };
+    return infraFail("screen_error", "unparseable vision response"); // 판독 불가 → 인프라오류 처리
   } catch (e) {
-    return { pass: false, category: "moderation_error", detail: String(e) };
+    return infraFail("moderation_error", String(e));
   }
 }
 

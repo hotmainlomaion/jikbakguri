@@ -13,7 +13,7 @@ export async function POST(req: Request) {
   if (!s.botProfileId || !s.title || !s.scenario || !s.greeting)
     return NextResponse.json({ error: "invalid_input" }, { status: 400 });
 
-  const blob = `${s.title} ${s.description ?? ""} ${s.scenario} ${s.greeting}`;
+  const blob = `${s.title} ${s.description ?? ""} ${s.detail ?? ""} ${s.scenario} ${s.greeting}`;
   if (heuristicScan(blob)) return NextResponse.json({ error: "blocked" }, { status: 422 });
 
   const admin = createAdminClient();
@@ -29,6 +29,9 @@ export async function POST(req: Request) {
     bot_profile_id: s.botProfileId,
     title: String(s.title).slice(0, 120),
     description: String(s.description ?? "").slice(0, 500),
+    detail: s.detail != null ? String(s.detail).slice(0, 1200) : null,
+    tags: Array.isArray(s.tags) ? s.tags.map((t: any) => String(t).slice(0, 24)).slice(0, 8) : [],
+    intensity: [1, 2, 3].includes(Number(s.intensity)) ? Number(s.intensity) : 2,
     scenario: String(s.scenario).slice(0, 4000),
     greeting: String(s.greeting).slice(0, 2000),
     is_published: false,
@@ -58,13 +61,17 @@ export async function PATCH(req: Request) {
   const patch: Record<string, any> = {};
   if (b.title !== undefined) patch.title = String(b.title).slice(0, 120);
   if (b.description !== undefined) patch.description = String(b.description).slice(0, 500);
+  if (b.detail !== undefined) patch.detail = b.detail != null ? String(b.detail).slice(0, 1200) : null;
+  if (b.tags !== undefined)
+    patch.tags = Array.isArray(b.tags) ? b.tags.map((t: any) => String(t).slice(0, 24)).slice(0, 8) : [];
+  if (b.intensity !== undefined && [1, 2, 3].includes(Number(b.intensity))) patch.intensity = Number(b.intensity);
   if (b.scenario !== undefined) patch.scenario = String(b.scenario).slice(0, 4000);
   if (b.greeting !== undefined) patch.greeting = String(b.greeting).slice(0, 2000);
   if (b.is_published !== undefined) patch.is_published = !!b.is_published;
   if (b.sort_order !== undefined) patch.sort_order = Number(b.sort_order) | 0;
 
   // 텍스트 변경 시 백스톱.
-  const textBlob = [patch.title, patch.description, patch.scenario, patch.greeting]
+  const textBlob = [patch.title, patch.description, patch.detail, patch.scenario, patch.greeting]
     .filter(Boolean)
     .join(" ");
   if (textBlob && heuristicScan(textBlob))
