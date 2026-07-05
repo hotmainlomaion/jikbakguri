@@ -46,6 +46,7 @@ export function ChatUI({
   scenarioTitle,
   scenarioIntro,
   initial,
+  initialImage,
   mood: initialMood,
   relationship: initialRel,
   recall,
@@ -57,6 +58,7 @@ export function ChatUI({
   scenarioTitle: string | null;
   scenarioIntro?: { title: string; detail: string | null; tags: string[]; intensity: number } | null;
   initial: Msg[];
+  initialImage?: string | null;
   mood: Mood;
   relationship: Relationship;
   recall: Recall | null;
@@ -67,7 +69,8 @@ export function ChatUI({
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState<null | "chat" | "image">(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [image, setImage] = useState<string | null>(null);
+  // 재진입 시 마지막 생성 이미지를 히어로로 복원(없으면 대표컷 폴백).
+  const [image, setImage] = useState<string | null>(initialImage ?? null);
   const [mood, setMood] = useState<Mood>(initialMood);
   const [rel, setRel] = useState<Relationship>(initialRel);
   const [wallet, setWallet] = useState<WalletClient>(initialWallet);

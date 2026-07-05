@@ -10,6 +10,9 @@ import { stageForIntimacy, stageProgress, stageIndex } from "@/lib/persona/relat
 import { getWallet } from "@/lib/economy";
 import { ChatUI } from "./chat-ui";
 
+// 재진입 시 최신 메시지 + 생성 이미지(만료 전) + 신선한 서명 URL을 항상 로드(라우터 캐시로 인한 누락 방지).
+export const dynamic = "force-dynamic";
+
 export default async function ChatPage({ params }: { params: { sessionId: string } }) {
   const gate = await requireVerifiedUser();
   if (!gate.ok) {
@@ -27,10 +30,10 @@ export default async function ChatPage({ params }: { params: { sessionId: string
   if (!session || session.user_id !== gate.userId) notFound();
   const bot = (session as any).bot_profiles;
 
-  const [{ data: messages }, { data: sessions }] = await Promise.all([
+  const [{ data: messages }, { data: sessions }, { data: imgRows }] = await Promise.all([
     admin
       .from("messages")
-      .select("id, role, content, kind")
+      .select("id, role, content, kind, created_at")
       .eq("session_id", params.sessionId)
       .order("created_at", { ascending: true }),
     admin
@@ -39,7 +42,34 @@ export default async function ChatPage({ params }: { params: { sessionId: string
       .eq("user_id", gate.userId)
       .order("last_active_at", { ascending: false })
       .limit(30),
+    // 이 세션에서 생성된 이미지(만료 전) — 재진입 시 히어로/인라인으로 복원.
+    admin
+      .from("images")
+      .select("storage_path, created_at")
+      .eq("session_id", params.sessionId)
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: true }),
   ]);
+
+  // 생성 이미지 서명 URL(1시간). 메시지와 created_at 기준 시간순 병합 + 마지막 1장은 히어로로.
+  let imageItems: { imageUrl: string; created_at: string }[] = [];
+  if (imgRows?.length) {
+    const paths = (imgRows as any[]).map((i) => i.storage_path);
+    const { data: signed } = await admin.storage.from("generated-images").createSignedUrls(paths, 3600);
+    const urlByPath = new Map<string, string>();
+    for (const s of signed ?? []) if (s.signedUrl) urlByPath.set(s.path!, s.signedUrl);
+    imageItems = (imgRows as any[])
+      .map((i) => ({ imageUrl: urlByPath.get(i.storage_path) as string, created_at: i.created_at }))
+      .filter((x) => x.imageUrl);
+  }
+  const initialImage = imageItems.length ? imageItems[imageItems.length - 1].imageUrl : null;
+  // 메시지(텍스트/씬) + 이미지(생성물)를 created_at로 인터리브 → 채팅 히스토리에 그대로 복원.
+  const initialTimeline = [
+    ...((messages ?? []) as any[]).map((m) => ({ id: m.id, role: m.role, content: m.content, kind: m.kind, _ts: m.created_at })),
+    ...imageItems.map((im, idx) => ({ id: `img-${idx}`, role: "assistant", content: "", imageUrl: im.imageUrl, _ts: im.created_at })),
+  ]
+    .sort((a, b) => new Date(a._ts).getTime() - new Date(b._ts).getTime())
+    .map(({ _ts, ...rest }) => rest);
 
   // 대화 내역 프로필 사진: 세션 봇들의 대표컷을 서명 URL로.
   const histAvatars = await signAvatars(
@@ -111,7 +141,8 @@ export default async function ChatPage({ params }: { params: { sessionId: string
       }}
       scenarioTitle={scenario?.title ?? null}
       scenarioIntro={scenarioIntro}
-      initial={(messages ?? []) as any}
+      initial={initialTimeline as any}
+      initialImage={initialImage}
       mood={mood}
       relationship={relationship}
       recall={recall}
