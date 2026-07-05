@@ -81,6 +81,7 @@ export function ChatUI({
   const [safeView, setSafeView] = useState(false);
   const [peekId, setPeekId] = useState<string | null>(null);
   const [recallShown, setRecallShown] = useState(!!recall);
+  const [streaming, setStreaming] = useState(false); // 스트리밍 중(타이핑 인디케이터 대신 라이브 말풍선)
   // 컨테이너 높이를 '실제 보이는 영역'에 정확히 맞추기 위한 뷰포트 상태(아래 effect가 구동).
   const [viewport, setViewport] = useState<{ height: number; top: number } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -164,42 +165,11 @@ export function ChatUI({
 
   // F32: 오프닝 상태 = 봇 인사만 있고 아직 사용자 발화 없음.
 
-  async function sendText(text: string, crowns = 0) {
-    const t = text.trim();
-    if (!t || busy) return;
-    setInput("");
-    setNotice(null);
-    setMsgs((m) => [...m, { role: "user", content: t }]);
-    setSuggestions([]); // 이전 추천 즉시 숨김(응답 후 새 맥락으로 갱신)
-    setBusy("chat");
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId, message: t, crowns }), // 왕관 보너스 포인트
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setBusy(null);
-      return err(data.error);
-    }
-    // #3 장면 전환 카드: 이동 감지 시 사용자 말풍선 뒤·AI 응답 앞에 작은 지문 카드를 먼저 노출.
-    if (data.sceneCard?.content) {
-      setMsgs((m) => [...m, { id: data.sceneCard.id ?? undefined, role: "assistant", content: data.sceneCard.content, kind: "scene" }]);
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    // 카톡식 순차 말풍선: 첫 통은 바로, 이후는 타이핑 지연을 두고 하나씩(사람이 여러 번 보내는 느낌).
-    // busy를 유지해 사이사이 "입력 중" 인디케이터가 보이게 한다.
-    const bubbles: string[] =
-      Array.isArray(data.bubbles) && data.bubbles.length ? data.bubbles : [data.reply].filter(Boolean);
-    for (let i = 0; i < bubbles.length; i++) {
-      if (i > 0) await new Promise((r) => setTimeout(r, Math.min(1500, 450 + bubbles[i].length * 20)));
-      setMsgs((m) => [...m, { role: "assistant", content: bubbles[i] }]);
-    }
-    setBusy(null);
-    if (data.mood) setMood((prev) => ({ ...prev, ...data.mood })); // F12 감정 갱신
-    // F10 관계 단계/친밀도 갱신 + 레벨업 알림 + 게임 포인트 플래시.
+  // 응답 완료 후 부가정보(감정·관계·크레딧·셀피) 반영 — 스트리밍/비스트리밍 공용.
+  function applyMeta(data: any, crowns: number) {
+    if (data.mood) setMood((prev) => ({ ...prev, ...data.mood })); // F12 감정
     if (data.relationship) {
-      const r = data.relationship;
+      const r = data.relationship; // F10 관계 단계/친밀도 + 레벨업/포인트 플래시
       setRel((prev) => ({
         ...prev,
         intimacy: r.intimacy,
@@ -210,7 +180,7 @@ export function ChatUI({
         level: r.level ?? prev.level,
       }));
       if (r.gained > 0) {
-        setPointFlash(`+${r.gained}${crowns > 0 ? " 👑" : ""}`); // 획득 포인트 플래시
+        setPointFlash(`+${r.gained}${crowns > 0 ? " 👑" : ""}`);
         setTimeout(() => setPointFlash(null), 1400);
       }
       if (r.stageUp) {
@@ -218,13 +188,94 @@ export function ChatUI({
         setTimeout(() => setStageUp(null), 5000);
       }
     }
-    // 크레딧 차감 반영(무제한 계정은 balance=-1로 넘어와 갱신 안 함).
     if (data.credits && !data.credits.unlimited && data.credits.balance >= 0)
       setWallet((w) => ({ ...w, balance: data.credits.balance }));
-    // F20 인챗 셀피(#7): 자동 생성 대신 확인 칩을 띄운다 — 사용자가 탭할 때만 생성해
-    // 일일 한도를 임의 소모하지 않게 한다.
-    if (data.selfie) setPendingSelfie(data.selfie);
-    fetchSuggestions(); // 새 맥락 기반 추천 답장 갱신
+    if (data.selfie) setPendingSelfie(data.selfie); // F20 셀피 확인 칩
+  }
+
+  // 스트리밍 채팅: NDJSON 이벤트(scene/token/done/blocked)를 읽어 라이브 말풍선에 실시간 누적.
+  async function sendText(text: string, crowns = 0) {
+    const t = text.trim();
+    if (!t || busy) return;
+    setInput("");
+    setNotice(null);
+    setMsgs((m) => [...m, { role: "user", content: t }]);
+    setSuggestions([]); // 이전 추천 즉시 숨김(응답 후 새 맥락으로 갱신)
+    setBusy("chat");
+    const streamId = `stream-${Date.now()}`; // 라이브 말풍선 안정 참조
+    let streamStarted = false;
+    const removeStream = () => setMsgs((m) => m.filter((x) => x.id !== streamId));
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, message: t, crowns }),
+      });
+      if (!res.ok || !res.body) {
+        setBusy(null);
+        const d = await res.json().catch(() => ({}));
+        return err(d.error);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let finalData: any = null;
+      let blockedErr: string | undefined;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev: any;
+          try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === "scene" && ev.sceneCard?.content) {
+            setMsgs((m) => [...m, { id: ev.sceneCard.id ?? undefined, role: "assistant", content: ev.sceneCard.content, kind: "scene" }]);
+          } else if (ev.type === "token") {
+            streamStarted = true;
+            setStreaming(true);
+            setMsgs((m) => {
+              const i = m.findIndex((x) => x.id === streamId);
+              if (i < 0) return [...m, { id: streamId, role: "assistant", content: ev.delta }];
+              const c = m.slice();
+              c[i] = { ...c[i], content: c[i].content + ev.delta };
+              return c;
+            });
+          } else if (ev.type === "done") {
+            finalData = ev;
+          } else if (ev.type === "blocked" || ev.type === "error") {
+            blockedErr = ev.error;
+          }
+        }
+      }
+      setStreaming(false);
+      setBusy(null);
+      if (blockedErr) {
+        removeStream(); // 표시된 스트리밍분 회수(차단/에러)
+        return err(blockedErr);
+      }
+      if (finalData) {
+        // 라이브 말풍선을 최종 reply(한자정제본)로 확정. 토큰이 하나도 안 왔으면 새로 추가.
+        if (finalData.reply)
+          setMsgs((m) => {
+            const i = m.findIndex((x) => x.id === streamId);
+            if (i < 0) return streamStarted ? m : [...m, { id: streamId, role: "assistant", content: finalData.reply }];
+            const c = m.slice();
+            c[i] = { ...c[i], content: finalData.reply };
+            return c;
+          });
+        applyMeta(finalData, crowns);
+      }
+      fetchSuggestions(); // 새 맥락 기반 추천 답장 갱신
+    } catch {
+      setStreaming(false);
+      setBusy(null);
+      removeStream();
+      err();
+    }
   }
   const send = () => sendText(input);
 
@@ -439,7 +490,7 @@ export function ChatUI({
                   onPeekEnd={() => setPeekId(null)}
                 />
               ))}
-              {busy && (
+              {busy && !streaming && (
                 <div className="flex items-center gap-2">
                   <Avatar name={bot.name} size={28} src={bot.avatarUrl} />
                   <div className="rounded-2xl rounded-tl-sm bg-surface2 px-4 py-2 text-sm text-muted">

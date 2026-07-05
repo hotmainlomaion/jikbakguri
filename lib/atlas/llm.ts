@@ -33,3 +33,30 @@ export async function chatComplete(
   if (!content) throw new Error("empty LLM response");
   return content;
 }
+
+// 스트리밍 변형: 토큰 델타가 올 때마다 onToken(delta)을 부르고, 완료 시 전체 텍스트를 반환한다.
+// 라우트가 SSE로 클라이언트에 흘려 '실시간 타이핑' 체감을 준다. 모더레이션 책임은 여전히 호출부.
+export async function chatStream(
+  messages: ChatMessage[],
+  onToken: (delta: string, full: string) => void | Promise<void>,
+  opts?: { model?: string; temperature?: number; maxTokens?: number }
+): Promise<string> {
+  const model = opts?.model ?? process.env.ATLAS_LLM_MODEL;
+  if (!model) throw new Error("ATLAS_LLM_MODEL not set");
+  const stream = await client().chat.completions.create({
+    model,
+    messages,
+    temperature: opts?.temperature ?? 0.8,
+    max_tokens: opts?.maxTokens ?? 800,
+    stream: true,
+  });
+  let full = "";
+  for await (const chunk of stream) {
+    const delta = chunk.choices?.[0]?.delta?.content ?? "";
+    if (!delta) continue;
+    full += delta;
+    await onToken(delta, full);
+  }
+  if (!full) throw new Error("empty LLM response");
+  return full;
+}

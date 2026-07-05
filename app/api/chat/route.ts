@@ -4,8 +4,9 @@
 import { NextResponse } from "next/server";
 import { requireVerifiedUser } from "@/lib/auth/gate";
 import { moderate } from "@/lib/moderation";
+import { heuristicScan } from "@/lib/moderation/categories";
 import { checkChatRate } from "@/lib/rate-limit";
-import { chatComplete } from "@/lib/atlas/llm";
+import { chatStream } from "@/lib/atlas/llm";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { ChatMessage } from "@/lib/atlas/types";
 import { stripHanzi } from "@/lib/text/sanitize";
@@ -145,104 +146,108 @@ export async function POST(req: Request) {
     sceneCard = { id: sc?.id ?? null, content: move.narration, location: move.location };
   }
 
-  // 3) LLM 호출 + 일관성 검사 재생성 루프(최대 1회 재시도).
-  let reply: string | null = null;
-  let corrective: ChatMessage[] = [];
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let draft: string;
-    try {
-      draft = await chatComplete([...baseContext, ...corrective]);
-    } catch {
-      return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
-    }
+  // 3) 스트리밍 생성(NDJSON) — 토큰을 실시간으로 흘려 체감 속도를 높인다.
+  //    · 안전: 입력 모더레이션은 위에서 이미 하드 게이트로 통과. 생성 중 매 청크마다 결정론적
+  //      미성년 스캔(heuristicScan)을 돌려 즉시 중단. 생성 완료 후 출력 모더레이션(chat_out, LLM
+  //      분류기 포함)으로 최종 확인 — 실패 시 blocked 이벤트로 클라이언트가 표시분을 회수한다.
+  //    · 일관성: 스트리밍에선 재생성 불가하므로 hard 위반(안전)만 차단, soft 위반은 그대로 수용.
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      const fail = async (event: Record<string, unknown>) => {
+        await dropUserMsg();
+        send(event);
+        controller.close();
+      };
+      try {
+        // 씬 전환 카드 먼저(사용자 말풍선 뒤, AI 응답 앞).
+        if (sceneCard?.content) send({ type: "scene", sceneCard });
 
-    // 일관성 검사는 캐논(정체성/나이/불변사실/말투)만 검증한다. 롤링 요약과의 모순은
-    // 검사하지 않음 — 자유텍스트 요약의 휴리스틱 모순 감지는 오탐(불필요 재생성) 위험이 커서
-    // 의도적으로 제외(알려진 한계). 요약은 프롬프트로만 주입돼 모델의 자발적 연속성에 의존.
-    const cons = checkConsistency(canonRef.canon, draft);
-    if (cons.ok) {
-      reply = draft;
-      break;
-    }
-    // hard 위반(안전) → 재생성 없이 차단. 출력 moderation과 일관.
-    if (cons.violations.some((v) => v.hard)) {
-      await moderate({ userId: gate.userId, channel: "chat_out", text: draft });
-      await dropUserMsg();
-      return NextResponse.json({ error: "blocked_output", category: "consistency_hard" }, { status: 422 });
-    }
-    // soft 위반 → 교정 지시 추가 후 1회 재생성. 재시도도 실패하면 마지막 초안 채택.
-    reply = draft;
-    corrective = [
-      {
-        role: "system",
-        content:
-          "Your previous reply broke character consistency (" +
-          cons.violations.map((v) => v.type).join(", ") +
-          "). Regenerate strictly in-character and consistent with the canon.",
-      },
-    ];
-  }
-
-  if (!reply) return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
-
-  // 한자 누출 제거: Qwen 기반 모델이 한국어에 중국어 토큰(线下/安全 등)을 섞는 문제 정제.
-  // 저장·표시·컨텍스트 모두 정제본을 쓰도록 여기서 한 번에 처리.
-  reply = stripHanzi(reply);
-
-  // 4) 출력 모더레이션 — 반환 전(최종 안전 권한).
-  const outMod = await moderate({ userId: gate.userId, channel: "chat_out", text: reply });
-  if (!outMod.pass) {
-    await dropUserMsg(); // #13: 차단 턴은 컨텍스트에 남기지 않는다.
-    return NextResponse.json({ error: "blocked_output", category: outMod.category }, { status: 422 });
-  }
-
-  // 5) 저장 + 세션 활동시각 갱신. last_message_is_proactive=false(#14): 사용자 대화가 최신이므로 선톡 배지 해제.
-  await admin.from("messages").insert({ session_id: sessionId, role: "assistant", content: reply });
-  await admin
-    .from("sessions")
-    .update({ last_active_at: new Date().toISOString(), last_message_is_proactive: false })
-    .eq("id", sessionId);
-
-  // 6) 연속성 기억 추출·기록(입력 moderation 통과분에서 파생, 저장 전 재검사).
-  const facts = extractDurableFacts(message);
-  if (facts.length) await recordCharacterMemory(sessionId, gate.userId, facts);
-
-  // 7) 롤링 요약 갱신(윈도우 초과 시에만 LLM 호출, best-effort — 실패해도 응답 무손상).
-  await maybeSummarize(sessionId, gate.userId);
-
-  // 8) 감정(F12) + 관계 친밀도/단계(F10) 갱신 — 사용자 메시지 신호로. best-effort, UI 표시용 반환.
-  const affect = await updateSessionMood(sessionId, message, crownCount);
-
-  // 9) 인챗 셀피(F20) — 사용자가 사진을 요청했으면 selfie 신호+파생 프롬프트를 반환한다.
-  //    실제 생성/저장/모더레이션은 클라이언트가 /api/image 를 호출해 기존 파이프라인으로 수행
-  //    (자동 프롬프트도 입력·출력 모더레이션을 그대로 통과 — 우회 경로 없음).
-  const selfie = detectSelfieRequest(message) ? buildSelfieRequest(message, reply) : null;
-
-  // 10) 크레딧 차감(성공한 1턴에 대해). idem으로 재시도 이중차감 방지. 무제한 계정은 spend 내부에서 면제.
-  const spend = await spendCredits(
-    gate.userId, CHAT_CREDIT_COST, "chat", "session", sessionId,
-    userMsg?.id ? `chat:${userMsg.id}` : undefined
-  );
-  const credits = { balance: spend.balance, spent: spend.charged, cost: CHAT_CREDIT_COST, unlimited: wallet0.unlimited };
-
-  return NextResponse.json({
-    reply,
-    bubbles: splitIntoBubbles(reply), // 카톡식 순차 말풍선(표시용). 저장/컨텍스트는 reply 원문.
-    sceneCard, // #3 장면 전환 지문(있으면 사용자 말풍선 뒤에 카드로 표시)
-    credits, // 크레딧 차감 결과(잔액·소모). UI 헤더 갱신용.
-    mood: affect ? affect.mood : null,
-    relationship: affect
-      ? {
-          intimacy: affect.intimacy,
-          stage: affect.stage,
-          label: affect.stageLabel,
-          emoji: affect.stageEmoji,
-          stageUp: affect.stageUp,
-          level: affect.level, // 관계 레벨(1~7)
-          gained: affect.gained, // 이번 턴 획득 포인트
-          progress: affect.progress, // 단계 내 진행률(게이지)
+        // 토큰 스트리밍 + per-chunk 미성년 스캔.
+        let minorAbort = false;
+        let full: string;
+        try {
+          full = await chatStream(baseContext, (delta, acc) => {
+            if (heuristicScan(acc)) { minorAbort = true; throw new Error("__MINOR_ABORT__"); }
+            send({ type: "token", delta });
+          });
+        } catch (e) {
+          if (minorAbort) {
+            await moderate({ userId: gate.userId, channel: "chat_out", text: "[stream minor abort]" });
+            return fail({ type: "blocked", error: "blocked_output", category: "minor" });
+          }
+          return fail({ type: "error", error: "ai_unavailable" });
         }
-      : null,
-    selfie,
+
+        // 한자 누출 제거(Qwen 등 한국어에 중국어 토큰 혼입 방지).
+        const reply = stripHanzi(full);
+
+        // 일관성(캐논) — hard 위반(안전)만 차단.
+        const cons = checkConsistency(canonRef.canon, reply);
+        if (cons.violations.some((v) => v.hard)) {
+          await moderate({ userId: gate.userId, channel: "chat_out", text: reply });
+          return fail({ type: "blocked", error: "blocked_output", category: "consistency_hard" });
+        }
+
+        // 출력 모더레이션 — 최종 안전 권한(실패 시 표시분 회수).
+        const outMod = await moderate({ userId: gate.userId, channel: "chat_out", text: reply });
+        if (!outMod.pass)
+          return fail({ type: "blocked", error: "blocked_output", category: outMod.category });
+
+        // 저장 + 세션 활동시각 갱신(선톡 배지 해제).
+        await admin.from("messages").insert({ session_id: sessionId, role: "assistant", content: reply });
+        await admin
+          .from("sessions")
+          .update({ last_active_at: new Date().toISOString(), last_message_is_proactive: false })
+          .eq("id", sessionId);
+
+        // 연속성 기억 · 롤링 요약 · 감정/관계 · 셀피 · 크레딧(기존 로직 그대로, best-effort).
+        const facts = extractDurableFacts(message);
+        if (facts.length) await recordCharacterMemory(sessionId, gate.userId, facts);
+        await maybeSummarize(sessionId, gate.userId);
+        const affect = await updateSessionMood(sessionId, message, crownCount);
+        const selfie = detectSelfieRequest(message) ? buildSelfieRequest(message, reply) : null;
+        const spend = await spendCredits(
+          gate.userId, CHAT_CREDIT_COST, "chat", "session", sessionId,
+          userMsg?.id ? `chat:${userMsg.id}` : undefined
+        );
+        const credits = { balance: spend.balance, spent: spend.charged, cost: CHAT_CREDIT_COST, unlimited: wallet0.unlimited };
+
+        send({
+          type: "done",
+          reply,
+          bubbles: splitIntoBubbles(reply),
+          credits,
+          mood: affect ? affect.mood : null,
+          relationship: affect
+            ? {
+                intimacy: affect.intimacy,
+                stage: affect.stage,
+                label: affect.stageLabel,
+                emoji: affect.stageEmoji,
+                stageUp: affect.stageUp,
+                level: affect.level,
+                gained: affect.gained,
+                progress: affect.progress,
+              }
+            : null,
+          selfie,
+        });
+        controller.close();
+      } catch {
+        try { await dropUserMsg(); } catch {}
+        try { send({ type: "error", error: "ai_unavailable" }); } catch {}
+        try { controller.close(); } catch {}
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no", // 프록시 버퍼링 방지(즉시 flush)
+    },
   });
 }
