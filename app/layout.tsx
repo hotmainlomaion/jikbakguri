@@ -19,7 +19,12 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ko">
-      <body className="min-h-[100dvh]">{children}</body>
+      {/* 모바일-온리: 데스크톱에서도 중앙 좁은 컬럼(제타식). 바깥은 레터박스(검정). */}
+      <body className="min-h-[100dvh] bg-black">
+        <div className="relative mx-auto min-h-[100dvh] w-full max-w-[500px] bg-bg shadow-[0_0_60px_rgba(0,0,0,0.7)]">
+          {children}
+        </div>
+      </body>
     </html>
   );
 }

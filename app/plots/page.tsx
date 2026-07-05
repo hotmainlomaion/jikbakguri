@@ -30,7 +30,12 @@ export default async function PlotsPage() {
   return (
     <div className="mx-auto min-h-[100dvh] max-w-[480px] bg-bg">
       <main className="px-4 py-5 pb-24">
-        <h1 className="mb-4 text-xl font-semibold">플롯 · 멀티 캐릭터 스토리</h1>
+        <div className="mb-4 flex items-center justify-between">
+          <h1 className="text-xl font-semibold">플롯 · 멀티 캐릭터 스토리</h1>
+          <Link href="/plots/new" className="btn-primary !px-3 !py-1.5 text-xs">
+            ✨ 만들기
+          </Link>
+        </div>
         {rows.length === 0 ? (
           <p className="mt-16 text-center text-muted">아직 공개된 플롯이 없어요.</p>
         ) : (

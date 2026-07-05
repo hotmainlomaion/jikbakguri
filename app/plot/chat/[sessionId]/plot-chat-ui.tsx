@@ -27,6 +27,7 @@ export function PlotChatUI({
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [mode, setMode] = useState<"chat" | "novel">("chat"); // 대화모드 ↔ 소설모드
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -71,18 +72,36 @@ export function PlotChatUI({
         <Link href="/plots" className="-m-2 p-2 text-muted hover:text-text">
           <IcBack />
         </Link>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{title}</div>
           <div className="text-[11px] text-subtle">내 캐릭터: {protagonistName}</div>
+        </div>
+        {/* 대화모드 ↔ 소설모드 토글 */}
+        <div className="flex shrink-0 overflow-hidden rounded-full border border-border text-[11px]">
+          {(["chat", "novel"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={"px-2.5 py-1 " + (mode === m ? "bg-primary text-white" : "text-muted")}
+            >
+              {m === "chat" ? "대화" : "소설"}
+            </button>
+          ))}
         </div>
       </header>
 
       {/* 타임라인 */}
       <main className="flex-1 space-y-3 overflow-y-auto px-3 py-4">
         <p className="mx-auto w-fit rounded-full bg-surface2 px-3 py-1 text-[11px] text-subtle">이 이야기는 AI가 생성한 가상의 콘텐츠예요</p>
-        {msgs.map((m, i) => (
-          <Bubble key={i} m={m} />
-        ))}
+        {mode === "novel" ? (
+          <div className="space-y-2.5 px-1 text-[14.5px] leading-[1.75]">
+            {msgs.map((m, i) => (
+              <NovelLine key={i} m={m} />
+            ))}
+          </div>
+        ) : (
+          msgs.map((m, i) => <Bubble key={i} m={m} />)
+        )}
         {busy && (
           <div className="flex items-center gap-2 text-sm text-muted">
             <span className="inline-flex gap-1">
@@ -119,6 +138,24 @@ export function PlotChatUI({
         </div>
       </div>
     </div>
+  );
+}
+
+// 소설모드: 대사·지문을 산문처럼 한 줄씩. 화자는 볼드+대사, 지문은 이탤릭, 내 발화는 강조색.
+function NovelLine({ m }: { m: PlotBubble }) {
+  if (m.role === "user")
+    return (
+      <p className="text-primary">
+        <b>나</b> “{m.content}”
+      </p>
+    );
+  if (!m.speaker) return <p className="italic text-muted">{m.content}</p>;
+  return (
+    <p>
+      <b className="text-text">{m.speaker}</b> <span className="text-subtle">“</span>
+      {m.content}
+      <span className="text-subtle">”</span>
+    </p>
   );
 }
 
