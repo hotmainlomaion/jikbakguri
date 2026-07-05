@@ -156,13 +156,16 @@ export async function buildSceneRequest(
     "6) 인물의 고정 외형(얼굴/머리색/눈/피부/체형/나이)은 절대 쓰지 마라 — 그건 별도로 반영된다. 오직 옷·노출 상태·자세·표정·행위·배경·소품·무드만 써라.\n\n" +
     "출력은 한국어 한두 문장의 묘사만. 다른 말은 붙이지 마라.";
   const filledSys = sys.replace("[scenarioContext]", scenarioContext).replace("[locationRule]", locationRule);
+  // 장면 요약은 '빠른 보조 모델'로(기본 챗 모델이 72B 등 무거우면 이미지 경로가 함수 타임아웃(504)에 걸린다).
+  // 대화→장면 한두 문장 요약은 소형 모델로 충분. 미지정 시 기본 모델.
+  const model = process.env.ATLAS_SCENE_MODEL || process.env.ATLAS_IMAGE_PROMPT_MODEL || undefined;
   try {
     const out = await chatComplete(
       [
         { role: "system", content: filledSys },
         { role: "user", content: `대화:\n${recent}\n\n지금 장면 묘사:` },
       ],
-      { temperature: 0.5 } // 충실도 우선(낮은 온도로 임의 창작 억제).
+      { model, temperature: 0.5 } // 충실도 우선(낮은 온도로 임의 창작 억제).
     );
     return out.replace(/^\s*["'`]+|["'`]+\s*$/g, "").trim().slice(0, 600);
   } catch {
