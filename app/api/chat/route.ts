@@ -23,7 +23,7 @@ import { detectSceneMove } from "@/lib/persona/scene";
 import { getWallet, spendCredits, CHAT_CREDIT_COST } from "@/lib/economy";
 
 // Vercel 함수 실행 시간(초). 호스티드 LLM 응답 지연 대비 상향(Hobby 최대 60s, Pro 300s).
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // 카톡식 표시: 모델 응답을 줄바꿈 우선으로 여러 말풍선으로 나눈다(긴 줄은 문장부호로 재분할).
 // 저장은 원문 1건 유지(연속성) — 이 분할은 클라이언트 표시용.

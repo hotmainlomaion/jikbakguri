@@ -14,7 +14,7 @@ const EXPIRY_DAYS = 7; // 만료 정책(7-D)
 
 // Vercel 함수 실행 시간(초). 이미지 생성(호스티드 폴링)이 길 수 있어 상향.
 // Hobby 플랜 최대 60s, Pro 300s. 클라우드 이미지가 느리면 Pro로 올리고 이 값을 300으로.
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   const gate = await requireVerifiedUser();
