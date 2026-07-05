@@ -44,21 +44,32 @@ export function analyzeKoNsfw(text: string, style: ImageStyle): KoDirectives {
   const keepTop = matched.some((e) => e.category === "coverage" && e.effect === "keep_top");
   const keepBottom = matched.some((e) => e.category === "coverage" && e.effect === "keep_bottom");
 
-  // 노출 레벨: 구체 부위 지시(explicit)가 일반 지시(generic strip_all)를 우선.
   const has = (eff: string) => matched.some((e) => (e.category === "undress_verb" || e.category === "coverage") && e.effect === eff);
   // 자위·성기 자극·오럴 등 '성기가 보여야 하는' 행위는 하체를 노출한다(자위인데 옷 입은 채 방지).
   // 명시적 탈의 지시가 없어도 성기 접근 행위면 최소 하체 노출을 강제한다.
   const GENITAL_EXPOSE = new Set(["masturbation_female", "fingering", "cunnilingus", "clitoris"]);
   const genitalAct = matched.some((e) => GENITAL_EXPOSE.has(e.concept));
-  const explicitTop = has("strip_top") || has("above_waist");
-  const explicitBottom = has("strip_bottom") || has("below_waist") || genitalAct;
-  const generic = has("strip_all");
 
-  let level: "full" | "top" | "bottom" | null = null;
-  if (explicitTop && explicitBottom) level = "full";
-  else if (explicitTop) level = "top";
-  else if (explicitBottom) level = "bottom";
-  else if (generic) level = "full";
+  // ⚠️ effect=strip_all은 두 종류가 섞여 있어 concept로 구분해야 한다:
+  //  · '진짜 전체 탈의'(다 벗어/알몸/속옷 다 벗) — 상·하체 모두를 벗긴다.
+  //  · '맨 동사'(그냥 '벗어/벗고/보여줘/풀어') — 부위가 명시 안 됐을 때만 전체로 본다. '상의 벗어'의 '벗어'처럼
+  //    부위 지시에 딸린 동사이기도 하므로, 이걸 무조건 전체로 치면 '상의 벗어'가 알몸이 되는 오작동이 난다.
+  // 이 구분 덕에, koSignal 창에 남은 옛 부분 명령('상의 벗어')이 새 전체 명령('다 벗어/다 벗고')을 'top'으로
+  // 강등시키던 버그가 사라진다(전체 concept는 항상 상·하체 want를 세우므로 부분 지시에 가려지지 않는다).
+  const FULL_STRIP = new Set([
+    "strip_fully_naked", "fully_nude_state", "remove_underwear_all", "already_undressed_command", "strip_slowly",
+  ]);
+  const BARE_VERB = new Set(["undress_generic", "expose_show", "unfasten_untie", "pull_aside"]);
+  const fullWord = matched.some((e) => FULL_STRIP.has(e.concept));
+  const bareVerb = matched.some((e) => BARE_VERB.has(e.concept));
+
+  let wantTop = has("strip_top") || has("above_waist") || fullWord;
+  let wantBottom = has("strip_bottom") || has("below_waist") || genitalAct || fullWord;
+  // 부위 미지정 맨 동사('그냥 벗어')는 전체 탈의로 승격(명시 부위가 하나라도 있으면 그 지시를 우선).
+  if (!wantTop && !wantBottom && bareVerb) { wantTop = true; wantBottom = true; }
+
+  let level: "full" | "top" | "bottom" | null =
+    wantTop && wantBottom ? "full" : wantTop ? "top" : wantBottom ? "bottom" : null;
   // keep 반영(유지 지시가 있으면 그 부위는 벗기지 않음).
   if (level === "full" && keepBottom && !keepTop) level = "top";
   if (level === "full" && keepTop && !keepBottom) level = "bottom";
