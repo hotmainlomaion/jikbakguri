@@ -8,6 +8,7 @@ import { checkChatRate } from "@/lib/rate-limit";
 import { chatComplete } from "@/lib/atlas/llm";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { ChatMessage } from "@/lib/atlas/types";
+import { stripHanzi } from "@/lib/text/sanitize";
 import {
   getPersonaPrompt,
   getSessionCanon,
@@ -183,6 +184,10 @@ export async function POST(req: Request) {
   }
 
   if (!reply) return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
+
+  // 한자 누출 제거: Qwen 기반 모델이 한국어에 중국어 토큰(线下/安全 등)을 섞는 문제 정제.
+  // 저장·표시·컨텍스트 모두 정제본을 쓰도록 여기서 한 번에 처리.
+  reply = stripHanzi(reply);
 
   // 4) 출력 모더레이션 — 반환 전(최종 안전 권한).
   const outMod = await moderate({ userId: gate.userId, channel: "chat_out", text: reply });

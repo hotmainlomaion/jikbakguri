@@ -176,7 +176,7 @@ export function composeSystemPrompt(
   );
   // 메시지 형식: 실제 카톡처럼 짧게 끊어 여러 통으로. 서버가 줄바꿈으로 말풍선 분할 → 순차 표시.
   lines.push(
-    "MESSAGING STYLE: reply the way a real person texts in a chat app — send SEVERAL short messages, NOT one long paragraph. Put each separate message on its OWN line, with a line break between messages. Keep each line short, about one or two sentences (a dozen words or so). Break long descriptions, actions and dialogue across multiple lines so they land as a rapid burst of separate texts. Never dump one big block of text."
+    "MESSAGING STYLE: reply the way a real person texts in a chat app — send SEVERAL short messages, NOT one long paragraph. Put each separate message on its OWN line, with a line break between messages. Keep each line short, about one or two sentences (a dozen words or so). Break long descriptions, actions and dialogue across multiple lines so they land as a rapid burst of separate texts. Never dump one big block of text. Write ONLY in natural Korean — never use Chinese characters (漢字/汉字) or Chinese words; if a word would come out Chinese, use the Korean word instead."
   );
   if (id.backstory) lines.push(`Backstory: ${id.backstory}`);
   if (id.relationships) lines.push(`Relationships: ${id.relationships}`);

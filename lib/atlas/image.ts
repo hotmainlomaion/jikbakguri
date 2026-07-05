@@ -2,6 +2,7 @@
 // 합성 프롬프트는 호출 전 moderation을 통과해야 한다(라우트가 강제).
 // TODO(운영주체 확인): 실제 endpoint 응답 스키마에 맞춰 파싱 확정.
 import { chatComplete } from "./llm";
+import { stripHanzi } from "@/lib/text/sanitize";
 import { applyKoNsfw, stripExplicitTags } from "./ko-nsfw";
 
 export interface GeneratedImage {
@@ -167,7 +168,7 @@ export async function buildSceneRequest(
       ],
       { model, temperature: 0.5, timeoutMs: 12_000, maxTokens: 256, maxRetries: 0 } // 즉시 폴백(재시도 없음, 504 방지)
     );
-    return out.replace(/^\s*["'`]+|["'`]+\s*$/g, "").trim().slice(0, 600);
+    return stripHanzi(out.replace(/^\s*["'`]+|["'`]+\s*$/g, "").trim()).slice(0, 600);
   } catch {
     // 폴백: 마지막 상대 지시 그대로.
     return [...history].reverse().find((m) => m.role === "user")?.content?.slice(0, 300) ?? "";
@@ -250,30 +251,41 @@ async function generateNovita(prompt: string, style: ImageStyle, seed: number | 
     "lowres, bad anatomy, bad hands, extra digits, worst quality, low quality, jpeg artifacts, " +
     "signature, watermark, censored, mosaic censoring, bar censor";
 
-  // 1) 작업 제출.
-  const submit = await fetch(`${base}/v3/async/txt2img`, {
-    method: "POST",
-    headers: auth,
-    body: JSON.stringify({
-      extra: { response_image_type: "png" },
-      request: {
-        model_name: model,
-        prompt,
-        negative_prompt: neg,
-        width: style === "anime" ? 832 : 768,
-        height: style === "anime" ? 1216 : 1024,
-        image_num: 1,
-        steps: Number(process.env.NOVITA_STEPS ?? (style === "anime" ? 28 : 20)),
-        guidance_scale: Number(process.env.NOVITA_GUIDANCE ?? (style === "anime" ? 5 : 3.5)),
-        sampler_name: process.env.NOVITA_SAMPLER ?? "Euler a",
-        seed: seed ?? -1,
-      },
-    }),
-    signal: AbortSignal.timeout(30_000),
+  // 1) 작업 제출 — 간헐적 Novita 5xx/네트워크 오류에 대비해 최대 3회 재시도(이게 502의 주원인이었음).
+  const reqBody = JSON.stringify({
+    extra: { response_image_type: "png" },
+    request: {
+      model_name: model,
+      prompt,
+      negative_prompt: neg,
+      width: style === "anime" ? 832 : 768,
+      height: style === "anime" ? 1216 : 1024,
+      image_num: 1,
+      steps: Number(process.env.NOVITA_STEPS ?? (style === "anime" ? 28 : 20)),
+      guidance_scale: Number(process.env.NOVITA_GUIDANCE ?? (style === "anime" ? 5 : 3.5)),
+      sampler_name: process.env.NOVITA_SAMPLER ?? "Euler a",
+      seed: seed ?? -1,
+    },
   });
-  if (!submit.ok) throw new Error(`novita submit ${submit.status}: ${await submit.text()}`);
-  const taskId = (await submit.json())?.task_id;
-  if (!taskId) throw new Error("novita: no task_id");
+  let taskId: string | undefined;
+  let lastErr = "";
+  for (let attempt = 0; attempt < 3 && !taskId; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 800));
+    try {
+      const submit = await fetch(`${base}/v3/async/txt2img`, {
+        method: "POST",
+        headers: auth,
+        body: reqBody,
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!submit.ok) { lastErr = `submit ${submit.status}`; continue; } // 일시 오류 → 재시도
+      taskId = (await submit.json())?.task_id;
+      if (!taskId) lastErr = "no task_id";
+    } catch (e) {
+      lastErr = String(e); // 네트워크/타임아웃 → 재시도
+    }
+  }
+  if (!taskId) throw new Error(`novita submit failed after retries: ${lastErr}`);
 
   // 2) 결과 폴링(task-result). SUCCEED면 image_url 반환, FAILED면 throw.
   //    폴 간격을 짧게(700ms) 두어 생성 완료를 즉시 감지 → 체감 지연 축소(2s 간격 대비 평균 ~1s 절감).
