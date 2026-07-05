@@ -6,6 +6,7 @@ import { requireVerifiedUser } from "@/lib/auth/gate";
 import { moderate } from "@/lib/moderation";
 import { reserveImageQuota } from "@/lib/rate-limit";
 import { generateImage, buildImagePrompt, buildSceneRequest, freeLocalLLMs } from "@/lib/atlas/image";
+import { analyzeKoNsfw } from "@/lib/atlas/ko-nsfw";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getWallet, spendCredits, IMAGE_CREDIT_COST } from "@/lib/economy";
 
@@ -91,11 +92,27 @@ export async function POST(req: Request) {
         scenario: snap.scenario ?? null,
       };
     }
-    requestText = await buildSceneRequest(
-      msgs.map((m: any) => ({ role: m.role, content: m.content })),
-      (session as any).scene_location ?? null, // #3 현재 장소를 배경으로 고정
-      scenarioCtx // 설정된 시나리오를 장면의 기본 전제로
-    );
+    // B2 고속화: 마지막 사용자 메시지가 '명확한 직접 시각 지시'면 씬 요약 LLM(1회)을 생략하고
+    // 배경(시나리오)+위치+지시를 직접 조합 → LLM 2회를 1회로. 노출 상태 누적은 applyKoNsfw(koSignal)가
+    // 담당하므로 유지된다. 애매한(분위기) 요청은 요약이 가치 있어 기존 2단계를 그대로 둔다(충실도 보존).
+    const msgsMapped = msgs.map((m: any) => ({ role: m.role, content: m.content }));
+    const lastUser = [...msgsMapped].reverse().find((m) => m.role === "user")?.content ?? "";
+    const dir = analyzeKoNsfw(lastUser, style);
+    const isDirective =
+      !!dir.level ||
+      dir.tags.length > 0 ||
+      /침대|눕|누워|앉아|서서|기대|무릎|포즈|자세|보여|벗|올려|내려|다리|가슴|엉덩|허벅|만져|박아|빨아|넣어|올라타|교복|드레스|알몸/.test(lastUser);
+    if (isDirective && lastUser.trim()) {
+      const setting = (scenarioCtx?.detail || scenarioCtx?.description || "").toString().slice(0, 160);
+      const loc = (session as any).scene_location ? `장소는 '${(session as any).scene_location}'.` : "";
+      requestText = [loc, setting && `배경: ${setting}.`, `지금 이 순간: ${lastUser}`].filter(Boolean).join(" ");
+    } else {
+      requestText = await buildSceneRequest(
+        msgsMapped,
+        (session as any).scene_location ?? null, // #3 현재 장소를 배경으로 고정
+        scenarioCtx // 설정된 시나리오를 장면의 기본 전제로
+      );
+    }
     // applyKoNsfw(옷 제거·POV)의 신호는 '사용자의 실제 명령'만(aya 산문 오탐 방지).
     // 최근 사용자 메시지 몇 개를 모아 넘긴다 — 노출/탈의/행위 지시는 여기에만 담긴다.
     koSignal = msgs

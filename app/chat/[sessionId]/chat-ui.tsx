@@ -21,7 +21,7 @@ import { ProfileImage, ProfileDetails, type ProfileBot } from "@/components/prof
 import { MobileProfileSheet } from "@/components/mobile-profile-sheet";
 import { CreditBadge, type WalletClient } from "@/components/credit-badge";
 
-type Msg = { id?: string; role: "user" | "assistant"; content: string; imageUrl?: string; selfie?: boolean; kind?: string };
+type Msg = { id?: string; role: "user" | "assistant"; content: string; imageUrl?: string; selfie?: boolean; kind?: string; pending?: boolean };
 type Bot = ProfileBot;
 type Hist = { id: string; name: string; lastActive: string; avatar?: string | null };
 type Mood = { state: string; intensity: number; label: string; emoji: string };
@@ -85,6 +85,7 @@ export function ChatUI({
   const [peekId, setPeekId] = useState<string | null>(null);
   const [recallShown, setRecallShown] = useState(!!recall);
   const [streaming, setStreaming] = useState(false); // 스트리밍 중(타이핑 인디케이터 대신 라이브 말풍선)
+  const [imgPending, setImgPending] = useState(false); // 이미지 생성 진행 중(논블로킹 — 채팅은 계속 가능)
   // 컨테이너 높이를 '실제 보이는 영역'에 정확히 맞추기 위한 뷰포트 상태(아래 effect가 구동).
   const [viewport, setViewport] = useState<{ height: number; top: number } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -282,53 +283,70 @@ export function ChatUI({
   }
   const send = () => sendText(input);
 
-  // 공용 이미지 생성 — 스튜디오(F17)·셀카(F20) 공통. /api/image가 style/seed·모더레이션 담당.
+  // 이미지 생성(논블로킹): "그리는 중" 플레이스홀더를 즉시 넣고 백그라운드로 생성 → 준비되면 그 자리에 채운다.
+  // 생성 동안 채팅은 계속 가능(busy로 막지 않음). 동시 이미지는 imgPending으로 1개만.
   async function runImage(prompt: string, opts?: { asSelfie?: boolean }) {
-    if (busy || !prompt.trim()) return;
+    if (imgPending || !prompt.trim()) return;
     setNotice(null);
-    setBusy("image");
-    const res = await fetch("/api/image", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId, prompt }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setBusy(null);
-    if (!res.ok) {
-      // 셀피 맥락에선 한도 문구를 셀피용으로 구분(#7).
-      if (opts?.asSelfie && data.error === "daily_limit")
-        return setNotice("오늘은 사진을 더 받을 수 없어요. 내일 다시 받아볼 수 있어요.");
-      return err(data.error);
+    const phId = `imggen-${Date.now()}`;
+    setImgPending(true);
+    setMsgs((m) => [...m, { id: phId, role: "assistant", content: "", pending: true, selfie: opts?.asSelfie }]);
+    try {
+      const res = await fetch("/api/image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, prompt }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMsgs((m) => m.filter((x) => x.id !== phId)); // 플레이스홀더 제거
+        if (opts?.asSelfie && data.error === "daily_limit")
+          setNotice("오늘은 사진을 더 받을 수 없어요. 내일 다시 받아볼 수 있어요.");
+        else err(data.error);
+        return;
+      }
+      setImage(data.url); // 히어로 갱신
+      setMsgs((m) => m.map((x) => (x.id === phId ? { ...x, pending: false, imageUrl: data.url } : x)));
+      if (data.credits && !data.credits.unlimited && data.credits.balance >= 0)
+        setWallet((w) => ({ ...w, balance: data.credits.balance }));
+    } catch {
+      setMsgs((m) => m.filter((x) => x.id !== phId));
+      err();
+    } finally {
+      setImgPending(false);
     }
-    setImage(data.url);
-    setMsgs((m) => [
-      ...m,
-      { role: "assistant", content: "", imageUrl: data.url, selfie: opts?.asSelfie },
-    ]);
-    if (data.credits && !data.credits.unlimited && data.credits.balance >= 0)
-      setWallet((w) => ({ ...w, balance: data.credits.balance }));
   }
 
-  // 지금 장면 이미지 — 최근 대화(마지막 지시/내용)를 반영해 생성. 캐릭터 일관성은 서버가 identity+seed로 유지.
+  // 지금 장면 이미지 — 최근 대화를 반영해 생성(논블로킹). 캐릭터 일관성은 서버가 identity+seed로 유지.
   async function runSceneImage() {
-    if (busy) return;
+    if (imgPending) return;
     setNotice(null);
-    setBusy("image");
-    const res = await fetch("/api/image", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId, mode: "scene" }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setBusy(null);
-    if (!res.ok) {
-      if (data.error === "no_context") return setNotice("대화를 조금 더 나눈 뒤 장면을 그릴 수 있어요.");
-      return err(data.error);
+    const phId = `imggen-${Date.now()}`;
+    setImgPending(true);
+    setMsgs((m) => [...m, { id: phId, role: "assistant", content: "", pending: true }]);
+    try {
+      const res = await fetch("/api/image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, mode: "scene" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMsgs((m) => m.filter((x) => x.id !== phId));
+        if (data.error === "no_context") setNotice("대화를 조금 더 나눈 뒤 장면을 그릴 수 있어요.");
+        else err(data.error);
+        return;
+      }
+      setImage(data.url);
+      setMsgs((m) => m.map((x) => (x.id === phId ? { ...x, pending: false, imageUrl: data.url } : x)));
+      if (data.credits && !data.credits.unlimited && data.credits.balance >= 0)
+        setWallet((w) => ({ ...w, balance: data.credits.balance }));
+    } catch {
+      setMsgs((m) => m.filter((x) => x.id !== phId));
+      err();
+    } finally {
+      setImgPending(false);
     }
-    setImage(data.url);
-    setMsgs((m) => [...m, { role: "assistant", content: "", imageUrl: data.url }]);
-    if (data.credits && !data.credits.unlimited && data.credits.balance >= 0)
-      setWallet((w) => ({ ...w, balance: data.credits.balance }));
   }
 
   async function report() {
@@ -589,7 +607,7 @@ export function ChatUI({
               <div className="flex items-end gap-2">
                 <button
                   onClick={runSceneImage}
-                  disabled={!!busy}
+                  disabled={!!busy || imgPending}
                   title="지금 장면 이미지 — 최근 대화를 반영해 그려요"
                   className="btn-ghost shrink-0 !px-2.5"
                 >
@@ -772,6 +790,19 @@ function MessageRow({
         <div className="max-w-[80%] rounded-lg border border-line/60 bg-surface2/60 px-3.5 py-2 text-center text-[12.5px] italic leading-relaxed text-muted">
           <span className="mr-1 not-italic opacity-70">🎬</span>
           {msg.content}
+        </div>
+      </div>
+    );
+  }
+  // 이미지 생성 중 플레이스홀더(논블로킹): 자리를 잡아두고 준비되면 이 자리에 이미지가 채워진다.
+  if (msg.pending) {
+    return (
+      <div className="flex gap-2">
+        <Avatar name={botName} size={28} src={botAvatar} />
+        <div className="flex h-40 w-56 max-w-[70%] items-center justify-center rounded-2xl rounded-tl-sm border border-line/60 bg-surface2/60">
+          <span className="inline-flex items-center gap-2 text-sm text-muted">
+            🎨 그리는 중<span className="animate-pulse">···</span>
+          </span>
         </div>
       </div>
     );
