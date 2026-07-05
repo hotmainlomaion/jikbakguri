@@ -143,17 +143,28 @@ export async function POST(req: Request) {
   let img;
   try {
     img = await generateImage(composed, { style, seed });
-  } catch {
+  } catch (e) {
+    // 진단: 간헐 502의 실제 원인을 로그로 남긴다(Novita submit/task/poll 에러 메시지).
+    console.error(`[image] generate failed (style=${style}):`, String(e));
     return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
   }
 
-  // 바이트 확보.
-  let bytes: Buffer;
+  // 바이트 확보. img.url(호스티드 S3)은 간헐적 fetch 실패에 대비해 재시도.
+  let bytes: Buffer | null = null;
   if (img.b64) bytes = Buffer.from(img.b64, "base64");
   else if (img.url) {
-    const r = await fetch(img.url);
-    bytes = Buffer.from(await r.arrayBuffer());
-  } else return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
+    for (let attempt = 0; attempt < 3 && !bytes; attempt++) {
+      if (attempt) await new Promise((r) => setTimeout(r, 500));
+      try {
+        const r = await fetch(img.url, { signal: AbortSignal.timeout(20_000) });
+        if (!r.ok) continue;
+        bytes = Buffer.from(await r.arrayBuffer());
+      } catch (e) {
+        console.error(`[image] bytes fetch retry ${attempt}:`, String(e));
+      }
+    }
+  }
+  if (!bytes) return NextResponse.json({ error: "ai_unavailable" }, { status: 502 });
 
   // 3) 출력 이미지 스크리닝 — 저장/반환 전 (7-B 필수).
   // 분류기에 넘길 임시 서명 URL 대신, 우선 Storage에 임시 업로드 후 스크리닝.

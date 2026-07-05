@@ -99,7 +99,7 @@ export default async function GalleryPage() {
     for (const im of (imgs ?? []) as any[]) if (!latestPath.has(im.session_id)) latestPath.set(im.session_id, im.storage_path);
     const paths = [...latestPath.values()];
     if (paths.length) {
-      const { data: signed } = await admin.storage.from("generated-images").createSignedUrls(paths, 300);
+      const { data: signed } = await admin.storage.from("generated-images").createSignedUrls(paths, 3600); // 1시간(5분은 소프트내비 캐시로 만료됨)
       const pathToUrl = new Map<string, string>();
       for (const s of signed ?? []) if (s.signedUrl) pathToUrl.set(s.path!, s.signedUrl);
       for (const [sid, p] of latestPath) { const u = pathToUrl.get(p); if (u) thumbBySession.set(sid, u); }

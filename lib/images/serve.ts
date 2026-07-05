@@ -6,7 +6,9 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const BUCKET = "character-images";
-const AVATAR_TTL = 300; // 목록/아바타: 짧게(서명URL은 베어러 토큰). 매 요청 재서명이라 UX 무손상.
+// 목록/아바타 서명URL TTL. 이전 300초(5분)는 너무 짧아, 챗→홈 소프트 내비 시 라우터 캐시된
+// RSC의 서명URL이 만료되어 이미지가 안 뜨는 버그가 있었다(하드 새로고침해야 복구). 1시간으로 연장.
+const AVATAR_TTL = 3600;
 
 export type ServedImage = {
   id: string;
