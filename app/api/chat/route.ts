@@ -79,10 +79,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const botName = (session as any).bot_profiles?.name ?? "그녀";
 
-  // 1) 입력 모더레이션 — AI 호출 전.
-  const inMod = await moderate({ userId: gate.userId, channel: "chat_in", text: message });
-  if (!inMod.pass)
-    return NextResponse.json({ error: "blocked", category: inMod.category }, { status: 422 });
+  // 1) 입력 모더레이션(A1 낙관적) — 결정론 미성년/불법 필터(즉시)만 AI 호출 전 '하드 게이트'로 유지.
+  //    LLM 의미분류기(완곡·우회 표현)는 생성과 '동시에' 돌려(대기 없음) 스트림에서 위반 감지 시 중단·회수.
+  //    → 첫 글자까지의 분류기 대기(~2~4초)를 제거. (승인된 안전 완화: 결정론 필터는 여전히 사전 차단)
+  const inHeur = await moderate({ userId: gate.userId, channel: "chat_in", text: message, heuristicOnly: true });
+  if (!inHeur.pass)
+    return NextResponse.json({ error: "blocked", category: inHeur.category }, { status: 422 });
+  const inLLM: Promise<{ pass: boolean; category?: string }> = moderate({ userId: gate.userId, channel: "chat_in", text: message })
+    .then((r) => ({ pass: r.pass, category: (r as { category?: string }).category }))
+    .catch(() => ({ pass: true }));
 
   // 2) 페르소나 시스템 프롬프트 합성(고정 캐논 + 기억). 봇 평문 프롬프트 대신 SSOT 사용.
   const systemPrompt = await getPersonaPrompt(sessionId);
@@ -164,20 +169,32 @@ export async function POST(req: Request) {
         // 씬 전환 카드 먼저(사용자 말풍선 뒤, AI 응답 앞).
         if (sceneCard?.content) send({ type: "scene", sceneCard });
 
-        // 토큰 스트리밍 + per-chunk 미성년 스캔.
-        let minorAbort = false;
+        // A1: 동시 입력 LLM 분류기가 위반을 반환하면 스트림을 중단시킬 플래그.
+        let inputBlocked: string | null = null;
+        inLLM.then((r) => { if (!r.pass) inputBlocked = r.category ?? "minor"; });
+
+        // 토큰 스트리밍 + per-chunk 미성년 스캔 + 입력 분류기 위반 감시.
+        let aborted: string | null = null; // 차단 카테고리(설정 시 중단)
         let full: string;
         try {
           full = await chatStream(baseContext, (delta, acc) => {
-            if (heuristicScan(acc)) { minorAbort = true; throw new Error("__MINOR_ABORT__"); }
+            if (inputBlocked) { aborted = inputBlocked; throw new Error("__ABORT__"); } // 입력 완곡 위반(동시)
+            if (heuristicScan(acc)) { aborted = "minor"; throw new Error("__ABORT__"); } // 출력 미성년(결정론)
             send({ type: "token", delta });
           });
-        } catch (e) {
-          if (minorAbort) {
-            await moderate({ userId: gate.userId, channel: "chat_out", text: "[stream minor abort]" });
-            return fail({ type: "blocked", error: "blocked_output", category: "minor" });
+        } catch {
+          if (aborted) {
+            await moderate({ userId: gate.userId, channel: "chat_out", text: "[stream abort]" });
+            return fail({ type: "blocked", error: "blocked_output", category: aborted });
           }
           return fail({ type: "error", error: "ai_unavailable" });
+        }
+
+        // 입력 분류기가 (생성 후에라도) 위반이면 표시분 회수(마지막 안전망).
+        const inRes = await inLLM;
+        if (!inRes.pass) {
+          await moderate({ userId: gate.userId, channel: "chat_out", text: "[input late block]" });
+          return fail({ type: "blocked", error: "blocked_output", category: inRes.category ?? "minor" });
         }
 
         // 한자 누출 제거(Qwen 등 한국어에 중국어 토큰 혼입 방지).
