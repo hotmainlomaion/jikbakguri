@@ -205,11 +205,74 @@ export async function generateImage(
   prompt: string,
   opts?: { style?: ImageStyle; seed?: number | null }
 ): Promise<GeneratedImage> {
-  const provider = (process.env.IMAGE_PROVIDER ?? "local").toLowerCase();
   const style = opts?.style ?? "photoreal";
   const seed = opts?.seed ?? null;
+  // 스타일별 프로바이더 오버라이드(예: 실사=atlas 고속, 애니=novita 유지). 미지정 시 IMAGE_PROVIDER.
+  const provider = (
+    process.env[`IMAGE_PROVIDER_${style === "anime" ? "ANIME" : "PHOTOREAL"}`] ||
+    process.env.IMAGE_PROVIDER ||
+    "local"
+  ).toLowerCase();
+  if (provider === "atlas") return generateAtlas(prompt, style, seed);
   if (provider === "novita") return generateNovita(prompt, style, seed);
   return generateLocal(prompt, style, seed);
+}
+
+// Atlas Cloud 이미지(고속·무검열). generateImage(POST)→prediction id→prediction 폴링(status=completed).
+// 실사=z-image/turbo(~수초, 고화질), 애니=flux-schnell 등. NSFW 필터 없음(실측 확인).
+async function generateAtlas(prompt: string, style: ImageStyle, seed: number | null): Promise<GeneratedImage> {
+  const key = process.env.ATLASCLOUD_API_KEY;
+  if (!key) throw new Error("ATLASCLOUD_API_KEY not configured");
+  const base = process.env.ATLASCLOUD_BASE ?? "https://api.atlascloud.ai";
+  const model =
+    style === "anime"
+      ? process.env.ATLASCLOUD_MODEL_ANIME ?? "black-forest-labs/flux-schnell"
+      : process.env.ATLASCLOUD_MODEL_PHOTOREAL ?? "z-image/turbo";
+  const auth = { authorization: `Bearer ${key}`, "content-type": "application/json" };
+  const body = JSON.stringify({ model, prompt, ...(seed != null ? { seed } : {}) });
+
+  // 1) 제출(간헐 오류 대비 재시도). data.id 확보.
+  let predId = "";
+  let lastErr = "";
+  for (let a = 0; a < 3 && !predId; a++) {
+    if (a) await new Promise((r) => setTimeout(r, 600));
+    try {
+      const r = await fetch(`${base}/api/v1/model/generateImage`, {
+        method: "POST", headers: auth, body, signal: AbortSignal.timeout(30_000),
+      });
+      if (!r.ok) { lastErr = `submit ${r.status}`; continue; }
+      const j = await r.json();
+      predId = j?.data?.id ?? "";
+      if (!predId) lastErr = `no id: ${JSON.stringify(j).slice(0, 120)}`;
+    } catch (e) { lastErr = String(e); }
+  }
+  if (!predId) throw new Error(`atlas submit failed: ${lastErr}`);
+
+  // 2) 폴링(status: processing/starting → completed/succeeded). outputs에서 이미지 URL 추출.
+  const deadline = Date.now() + Number(process.env.ATLASCLOUD_TIMEOUT_MS ?? 60_000);
+  for (;;) {
+    if (Date.now() > deadline) throw new Error("atlas: poll timeout");
+    await new Promise((r) => setTimeout(r, 500));
+    let j: any;
+    try {
+      const r = await fetch(`${base}/api/v1/model/prediction/${predId}`, { headers: auth, signal: AbortSignal.timeout(15_000) });
+      if (!r.ok) continue;
+      j = await r.json();
+    } catch { continue; }
+    const status = String(j?.data?.status ?? "").toLowerCase();
+    if (status.includes("fail") || (j?.data?.error && String(j.data.error).trim()))
+      throw new Error(`atlas gen failed: ${j?.data?.error || status}`);
+    if (status.includes("complet") || status.includes("succe")) {
+      // outputs: URL 문자열 배열 또는 {url} 객체 배열. 견고하게 URL 추출.
+      const outs = j?.data?.outputs ?? [];
+      const first = Array.isArray(outs) ? outs[0] : outs;
+      const url = typeof first === "string" ? first : first?.url ?? first?.image_url;
+      if (url) return { url };
+      const m = JSON.stringify(j).match(/https?:\/\/[^\s"'\\]+/);
+      if (m) return { url: m[0] };
+      throw new Error("atlas: completed but no image url");
+    }
+  }
 }
 
 // 로컬/자체호스팅(동일 커스텀 계약). image-server.py 및 GPU에 올린 동일 서버.
