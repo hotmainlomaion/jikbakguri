@@ -108,7 +108,10 @@ export async function POST(req: Request) {
   }
 
   // 1) 입력 모더레이션 — 사용자 원문 의도(한국어 포함)를 호출 전 검사.
-  const inMod = await moderate({ userId: gate.userId, channel: "image_in", text: `${identity} ${requestText}` });
+  //    장면 모드(scene)의 requestText는 이미 chat_in에서 LLM 분류기를 통과한 대화에서 파생되므로
+  //    heuristic(미성년/불법 결정론 필터)만으로 재검사 → 이미지 경로의 LLM 호출을 줄여 함수 60초 예산을 지킨다.
+  //    수동 프롬프트(변형 스튜디오)는 새 입력이므로 LLM 분류기까지 검사.
+  const inMod = await moderate({ userId: gate.userId, channel: "image_in", text: `${identity} ${requestText}`, heuristicOnly: sceneMode });
   if (!inMod.pass)
     return NextResponse.json({ error: "blocked", category: inMod.category }, { status: 422 });
 

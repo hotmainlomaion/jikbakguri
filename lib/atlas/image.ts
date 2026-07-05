@@ -77,7 +77,7 @@ export async function buildImagePrompt(
         { role: "system", content: sys },
         { role: "user", content: user },
       ],
-      { model, temperature: 0.5, timeoutMs: 20_000, maxTokens: 320 } // 빠른 폴백(504 방지)
+      { model, temperature: 0.5, timeoutMs: 12_000, maxTokens: 256 } // 빠른 폴백(504 방지)
     );
     const cleaned = out.replace(/^\s*["'`]+|["'`]+\s*$/g, "").trim();
     if (/BLOCKED_MINOR/i.test(cleaned)) return cleaned; // 미성년 차단 토큰은 후처리 없이 그대로(라우트가 검출)
@@ -165,7 +165,7 @@ export async function buildSceneRequest(
         { role: "system", content: filledSys },
         { role: "user", content: `대화:\n${recent}\n\n지금 장면 묘사:` },
       ],
-      { model, temperature: 0.5, timeoutMs: 20_000, maxTokens: 320 } // 충실도 우선 + 빠른 폴백(504 방지)
+      { model, temperature: 0.5, timeoutMs: 12_000, maxTokens: 256 } // 충실도 우선 + 빠른 폴백(504 방지)
     );
     return out.replace(/^\s*["'`]+|["'`]+\s*$/g, "").trim().slice(0, 600);
   } catch {
