@@ -7,6 +7,7 @@ import {
   IcHeart,
   IcImage,
   IcPaw,
+  IcSpark,
   IcGear,
 } from "./icons";
 
@@ -17,6 +18,7 @@ export const NAV: NavItem[] = [
   { href: "/gallery", label: "홈", Icon: IcHome },
   { href: "/gallery?view=explore", label: "탐색", Icon: IcCompass },
   { href: "/gallery?view=ranking", label: "랭킹", Icon: IcCrown },
+  { href: "/character", label: "만들기", Icon: IcSpark },
   { href: "/history", label: "내 채팅", Icon: IcChatBubble },
   { href: "/gallery?view=favorites", label: "즐겨찾기", Icon: IcHeart },
   { href: "/gallery?view=collection", label: "컬렉션", Icon: IcImage },
@@ -29,7 +31,7 @@ export const NAV: NavItem[] = [
 export const MOBILE_NAV: NavItem[] = [
   { href: "/gallery", label: "홈", Icon: IcHome },
   { href: "/gallery?view=explore", label: "탐색", Icon: IcCompass },
-  { href: "/gallery?view=ranking", label: "랭킹", Icon: IcCrown },
+  { href: "/character", label: "만들기", Icon: IcSpark },
   { href: "/history", label: "내 채팅", Icon: IcChatBubble },
   { href: "/settings", label: "설정", Icon: IcGear },
 ];

@@ -85,12 +85,20 @@ export async function getProfileMedia(
 ): Promise<{ avatarUrl: string | null; collectionCounts: Record<string, number> }> {
   const admin = createAdminClient();
 
-  // published 확인(비공개 봇 이미지 비노출).
+  // published 확인(비공개 봇 이미지 비노출). 단 커스텀 봇은 avatar_path(generated-images)에서 직접 서빙.
   const { data: bot } = await admin
     .from("bot_profiles")
-    .select("is_published")
+    .select("is_published, is_custom, avatar_path")
     .eq("id", botId)
     .single();
+  if (bot?.is_custom) {
+    let avatarUrl: string | null = null;
+    if (bot.avatar_path) {
+      const { data: signed } = await admin.storage.from("generated-images").createSignedUrl(bot.avatar_path, AVATAR_TTL);
+      avatarUrl = signed?.signedUrl ?? null;
+    }
+    return { avatarUrl, collectionCounts: {} };
+  }
   if (!bot?.is_published) return { avatarUrl: null, collectionCounts: {} };
 
   const { data: imgs } = await admin
