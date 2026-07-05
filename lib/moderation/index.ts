@@ -100,7 +100,7 @@ async function classifyTextLLM(text: string): Promise<ModerationResult> {
           { role: "user", content: text.slice(0, 4000) },
         ],
       },
-      { timeout: Number(process.env.MODERATION_TEXT_TIMEOUT_MS ?? 8000) }
+      { timeout: Number(process.env.MODERATION_TEXT_TIMEOUT_MS ?? 8000), maxRetries: 1 }
     );
     const out = (resp.choices?.[0]?.message?.content ?? "").toUpperCase();
     if (out.includes("BLOCK")) return { pass: false, category: "minor", detail: "text-llm" };
@@ -187,7 +187,7 @@ async function classifyImageVision(
           },
         ],
       },
-      { timeout: Number(process.env.MODERATION_IMAGE_TIMEOUT_MS ?? 60000) }
+      { timeout: Number(process.env.MODERATION_IMAGE_TIMEOUT_MS ?? 60000), maxRetries: 1 }
     );
     const out = (resp.choices?.[0]?.message?.content ?? "").toUpperCase();
     if (out.includes("MINOR")) return { pass: false, category: "minor", detail: "vision" };
