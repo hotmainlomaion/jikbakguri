@@ -3,7 +3,22 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth/gate";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assertAdultCanon } from "@/lib/persona/core";
+import { heuristicScan } from "@/lib/moderation/categories";
 import type { PersonaCanon } from "@/lib/persona/types";
+
+// 봇 텍스트(이름/페르소나/외형/시스템프롬프트/캐논)에 미성년 서술이 없는지 스캔(#4).
+// 이 텍스트는 composeSystemPrompt로 상시 주입되므로 사용자 메시지와 동일 기준 적용(scenarios와 대칭).
+function botTextHasMinor(b: any, canon: PersonaCanon): boolean {
+  // ⚠️ boundaries는 스캔 제외 — 고정 안전문구("미성년 역할·묘사 금지")가 항상 "미성년"을 포함해
+  // 모든 봇을 오차단하기 때문. 운영자가 자유 입력하는 필드만 검사.
+  const blob = [
+    b.name, b.persona, b.appearance_desc, b.system_prompt,
+    canon.identity?.backstory, canon.identity?.relationships, canon.appearance,
+    ...(canon.canon_facts ?? []),
+    canon.voice?.register, ...(canon.voice?.tics ?? []),
+  ].filter(Boolean).join(" ");
+  return !!heuristicScan(blob);
+}
 
 // canon 조립(POST/PATCH 공용). character_age를 SSOT로 canon.identity.age에 강제 동기화 →
 // 클라가 canon.identity.age를 미성년으로 조작해도 character_age(>=18 CHECK)가 덮어씀(우회 차단).
@@ -44,6 +59,9 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "underage" }, { status: 422 });
   }
+  // 자유텍스트에 미성년 서술 주입 차단(#4).
+  if (botTextHasMinor(b, canon))
+    return NextResponse.json({ error: "blocked", category: "minor" }, { status: 422 });
 
   const admin = createAdminClient();
   const { error } = await admin.from("bot_profiles").insert({
@@ -118,6 +136,11 @@ export async function PATCH(req: Request) {
 
   if (Object.keys(patch).length === 0)
     return NextResponse.json({ error: "invalid_input" }, { status: 400 });
+
+  // 편집된 자유텍스트(+canon)에 미성년 서술 주입 차단(#4). canon 미변경 필드 편집도 커버.
+  const scanBlob = [patch.name, patch.persona, patch.appearance_desc, patch.system_prompt].filter(Boolean).join(" ");
+  if ((scanBlob && heuristicScan(scanBlob)) || (patch.canon && botTextHasMinor(patch, patch.canon as PersonaCanon)))
+    return NextResponse.json({ error: "blocked", category: "minor" }, { status: 422 });
 
   // canon/system_prompt/appearance_desc 변경은 bump_persona_version 트리거가 자동 처리(수동 증가 금지).
   const { error } = await admin.from("bot_profiles").update(patch).eq("id", b.id);

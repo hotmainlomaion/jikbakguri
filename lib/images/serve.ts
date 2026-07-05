@@ -6,7 +6,9 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const BUCKET = "character-images";
-const AVATAR_TTL = 300; // 목록/아바타: 짧게(서명URL은 베어러 토큰). 매 요청 재서명이라 UX 무손상.
+// 목록/아바타 서명URL TTL. 이전 300초(5분)는 너무 짧아, 챗→홈 소프트 내비 시 라우터 캐시된
+// RSC의 서명URL이 만료되어 이미지가 안 뜨는 버그가 있었다(하드 새로고침해야 복구). 1시간으로 연장.
+const AVATAR_TTL = 3600;
 
 export type ServedImage = {
   id: string;
@@ -47,18 +49,56 @@ export async function signAvatars(botIds: string[], ttl = AVATAR_TTL): Promise<M
   return out;
 }
 
+// 여러 봇의 히어로 배너(와이드) 서명URL 배치 발급 → Map<botId, url>. 없으면 미포함(호출부에서 아바타 폴백).
+export async function signHeroes(botIds: string[], ttl = AVATAR_TTL): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!botIds.length) return out;
+  const admin = createAdminClient();
+
+  const { data } = await admin
+    .from("character_images")
+    .select("bot_profile_id, storage_path, bot_profiles!inner(is_published)")
+    .in("bot_profile_id", botIds)
+    .eq("category", "hero")
+    .eq("is_primary", true)
+    .eq("review_status", "approved")
+    .eq("bot_profiles.is_published", true);
+
+  const rows = (data ?? []) as any[];
+  if (!rows.length) return out;
+
+  const paths = rows.map((r) => r.storage_path);
+  const { data: signed } = await admin.storage.from(BUCKET).createSignedUrls(paths, ttl);
+  const pathToUrl = new Map<string, string>();
+  for (const s of signed ?? []) if (s.signedUrl) pathToUrl.set(s.path!, s.signedUrl);
+
+  for (const r of rows) {
+    const url = pathToUrl.get(r.storage_path);
+    if (url) out.set(r.bot_profile_id, url);
+  }
+  return out;
+}
+
 // 단일 봇의 프로필 미디어: 대표 아바타 URL + 컬렉션 location별 approved 개수.
 export async function getProfileMedia(
   botId: string
 ): Promise<{ avatarUrl: string | null; collectionCounts: Record<string, number> }> {
   const admin = createAdminClient();
 
-  // published 확인(비공개 봇 이미지 비노출).
+  // published 확인(비공개 봇 이미지 비노출). 단 커스텀 봇은 avatar_path(generated-images)에서 직접 서빙.
   const { data: bot } = await admin
     .from("bot_profiles")
-    .select("is_published")
+    .select("is_published, is_custom, avatar_path")
     .eq("id", botId)
     .single();
+  if (bot?.is_custom) {
+    let avatarUrl: string | null = null;
+    if (bot.avatar_path) {
+      const { data: signed } = await admin.storage.from("generated-images").createSignedUrl(bot.avatar_path, AVATAR_TTL);
+      avatarUrl = signed?.signedUrl ?? null;
+    }
+    return { avatarUrl, collectionCounts: {} };
+  }
   if (!bot?.is_published) return { avatarUrl: null, collectionCounts: {} };
 
   const { data: imgs } = await admin

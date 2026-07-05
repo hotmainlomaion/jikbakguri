@@ -168,13 +168,31 @@ export function ScenarioManager({ botId, scenarios }: { botId: string; scenarios
 function ScenarioRow({ s, onDelete, onTogglePub }: { s: any; onDelete: () => void; onTogglePub: () => void }) {
   const reload = useReload();
   const [edit, setEdit] = useState(false);
-  const [f, setF] = useState({ title: s.title, description: s.description, scenario: s.scenario, greeting: s.greeting });
+  const [f, setF] = useState({
+    title: s.title,
+    description: s.description,
+    detail: s.detail ?? "",
+    tags: (s.tags ?? []).join(", "),
+    intensity: s.intensity ?? 2,
+    scenario: s.scenario,
+    greeting: s.greeting,
+  });
 
   async function save() {
+    const body = {
+      id: s.id,
+      title: f.title,
+      description: f.description,
+      detail: f.detail,
+      tags: f.tags.split(",").map((t: string) => t.trim()).filter(Boolean),
+      intensity: Number(f.intensity),
+      scenario: f.scenario,
+      greeting: f.greeting,
+    };
     const res = await fetch("/api/admin/scenarios", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: s.id, ...f }),
+      body: JSON.stringify(body),
     });
     if (res.ok) { setEdit(false); reload(); }
   }
@@ -183,8 +201,17 @@ function ScenarioRow({ s, onDelete, onTogglePub }: { s: any; onDelete: () => voi
     return (
       <div className="card space-y-2">
         <input className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="제목" />
-        <input className="input" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="요약" />
-        <textarea className="input" value={f.scenario} onChange={(e) => setF({ ...f, scenario: e.target.value })} placeholder="세계관/상황" />
+        <input className="input" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="간략 훅(요약)" />
+        <textarea className="input" value={f.detail} onChange={(e) => setF({ ...f, detail: e.target.value })} placeholder="구체적 상황(선택 카드 노출)" />
+        <div className="flex gap-2">
+          <input className="input flex-1" value={f.tags} onChange={(e) => setF({ ...f, tags: e.target.value })} placeholder="태그(쉼표 구분)" />
+          <select className="input w-24" value={f.intensity} onChange={(e) => setF({ ...f, intensity: Number(e.target.value) })}>
+            <option value={1}>🔥 1</option>
+            <option value={2}>🔥 2</option>
+            <option value={3}>🔥 3</option>
+          </select>
+        </div>
+        <textarea className="input" value={f.scenario} onChange={(e) => setF({ ...f, scenario: e.target.value })} placeholder="세계관/상황(시스템 주입)" />
         <textarea className="input" value={f.greeting} onChange={(e) => setF({ ...f, greeting: e.target.value })} placeholder="첫 인사" />
         <div className="flex gap-2">
           <button onClick={save} className="btn-primary text-xs">저장</button>
@@ -211,21 +238,39 @@ function ScenarioRow({ s, onDelete, onTogglePub }: { s: any; onDelete: () => voi
 }
 
 function ScenarioAddForm({ botId, onDone, onCancel }: { botId: string; onDone: () => void; onCancel: () => void }) {
-  const [f, setF] = useState({ title: "", description: "", scenario: "", greeting: "" });
+  const [f, setF] = useState({ title: "", description: "", detail: "", tags: "", intensity: 2, scenario: "", greeting: "" });
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const res = await fetch("/api/admin/scenarios", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ botProfileId: botId, ...f }),
+      body: JSON.stringify({
+        botProfileId: botId,
+        title: f.title,
+        description: f.description,
+        detail: f.detail,
+        tags: f.tags.split(",").map((t) => t.trim()).filter(Boolean),
+        intensity: Number(f.intensity),
+        scenario: f.scenario,
+        greeting: f.greeting,
+      }),
     });
     if (res.ok) onDone();
   }
   return (
     <form onSubmit={submit} className="card space-y-2">
       <input required className="input" placeholder="제목" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} />
-      <input required className="input" placeholder="요약" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
-      <textarea required className="input" placeholder="세계관/상황(성인 설정)" value={f.scenario} onChange={(e) => setF({ ...f, scenario: e.target.value })} />
+      <input required className="input" placeholder="간략 훅(요약)" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+      <textarea className="input" placeholder="구체적 상황(선택 카드 노출)" value={f.detail} onChange={(e) => setF({ ...f, detail: e.target.value })} />
+      <div className="flex gap-2">
+        <input className="input flex-1" placeholder="태그(쉼표 구분)" value={f.tags} onChange={(e) => setF({ ...f, tags: e.target.value })} />
+        <select className="input w-24" value={f.intensity} onChange={(e) => setF({ ...f, intensity: Number(e.target.value) })}>
+          <option value={1}>🔥 1</option>
+          <option value={2}>🔥 2</option>
+          <option value={3}>🔥 3</option>
+        </select>
+      </div>
+      <textarea required className="input" placeholder="세계관/상황(성인 설정, 시스템 주입)" value={f.scenario} onChange={(e) => setF({ ...f, scenario: e.target.value })} />
       <textarea required className="input" placeholder="첫 인사(오프닝)" value={f.greeting} onChange={(e) => setF({ ...f, greeting: e.target.value })} />
       <div className="flex gap-2">
         <button className="btn-primary text-xs">등록</button>

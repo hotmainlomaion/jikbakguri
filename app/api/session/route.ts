@@ -12,14 +12,14 @@ export async function POST(req: Request) {
   if (!botProfileId) return NextResponse.json({ error: "invalid_input" }, { status: 400 });
 
   const admin = createAdminClient();
-  // published 봇만 세션 시작 허용.
+  // published 봇 또는 '소유자의 커스텀 봇'만 세션 시작 허용(커스텀은 비공개).
   const { data: bot } = await admin
     .from("bot_profiles")
-    .select("id")
+    .select("id, is_published, is_custom, created_by")
     .eq("id", botProfileId)
-    .eq("is_published", true)
     .single();
-  if (!bot) return NextResponse.json({ error: "bot_not_found" }, { status: 404 });
+  if (!bot || (!bot.is_published && !(bot.is_custom && bot.created_by === gate.userId)))
+    return NextResponse.json({ error: "bot_not_found" }, { status: 404 });
 
   const { data: session, error } = await admin
     .from("sessions")

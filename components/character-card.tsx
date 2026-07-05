@@ -17,9 +17,13 @@ export type CardBot = {
 export function CharacterCard({
   bot,
   onSelect,
+  favorited,
+  onToggleFav,
 }: {
   bot: CardBot;
   onSelect: (b: CardBot) => void;
+  favorited?: boolean;
+  onToggleFav?: (id: string) => void;
 }) {
   return (
     <button
@@ -36,6 +40,25 @@ export function CharacterCard({
         {bot.tags[0] && (
           <span className="absolute right-2 top-2 z-10 rounded-md bg-black/45 px-1.5 py-0.5 text-[10px] font-medium text-white/90 backdrop-blur">
             #{bot.tags[0]}
+          </span>
+        )}
+        {onToggleFav && (
+          // F39 즐겨찾기 하트 — 카드 클릭 전파 차단.
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={favorited ? "즐겨찾기 해제" : "즐겨찾기"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFav(bot.id);
+            }}
+            className={
+              "absolute left-2 z-10 flex h-7 w-7 items-center justify-center rounded-full text-sm backdrop-blur transition-colors " +
+              (bot.isNew ? "top-9 " : "top-2 ") +
+              (favorited ? "bg-danger/80 text-white" : "bg-black/45 text-white/80 hover:text-white")
+            }
+          >
+            {favorited ? "♥" : "♡"}
           </span>
         )}
         {bot.avatarUrl ? (

@@ -6,13 +6,16 @@ CLAUDE.md 핸드오프 스펙 기반 구현. Next.js 14 (App Router) + Supabase 
 
 ```bash
 npm install
-cp .env.local.example .env.local   # 값 채우기 (TODO(운영주체 확인) 항목)
-# Supabase에 마이그레이션 적용
-#   supabase/migrations/0001_init.sql, 0002_storage.sql, 그리고 supabase/seed.sql
+cp .env.local.example .env.local   # 값 채우기 (로컬 기본값 그대로도 동작)
+# Supabase에 마이그레이션 순서대로 적용: supabase/migrations/0001_init.sql ~ 0008_character_image_style.sql
+# 이어서 시드: supabase/seed.sql  (Rin 실사 / Yuna 애니 + 시나리오 6종)
 npm run dev
 ```
 
 운영자 지정: `insert into public.admins (user_id) values ('<uuid>');`
+
+**상용 배포**(Vercel + Supabase + 모델 백엔드 전환, 안전 체크리스트): [DEPLOYMENT.md](DEPLOYMENT.md) 참조.
+로컬 모델 스택(EVA-Qwen 챗 / FLUX·Animagine 이미지 / llava 스크리닝) 재현은 DEPLOYMENT 부록.
 
 ## 데모 실행 — GitHub Codespaces (웹 런치)
 

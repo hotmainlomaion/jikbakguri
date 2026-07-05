@@ -23,7 +23,7 @@ function BottomTabBarInner() {
 
 function Bar({ path, view }: { path: string; view: string | null }) {
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-bg2/95 pb-safe backdrop-blur lg:hidden">
+    <nav className="fixed inset-x-0 bottom-0 z-40 mx-auto flex max-w-[500px] border-t border-line bg-bg2/95 pb-safe backdrop-blur">
       {MOBILE_NAV.map(({ href, label, Icon }) => {
         const active = isActive(href, path, view);
         return (

@@ -11,7 +11,7 @@ export function NavSidebar({ ranking = [] }: { ranking?: RankItem[] }) {
   const view = useSearchParams().get("view");
 
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-line bg-bg2 lg:flex">
+    <aside className="hidden">
       <div className="px-5 py-4">
         <Link href="/gallery">
           <Logo />
