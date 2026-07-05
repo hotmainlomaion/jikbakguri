@@ -126,7 +126,9 @@ export async function POST(req: Request) {
     console.log("[image] user:", JSON.stringify(requestText), "\n[image] built:", JSON.stringify(composed));
   // 백스톱(감사 #6): 빌드된 영어 프롬프트도 heuristic이 아닌 moderate()로 재검사해
   // 외부 텍스트 분류기까지 통과시킨다(번역 과정에서 구체화된 위법 표현 방어). 원문·빌드결과 양쪽 검사.
-  const builtMod = await moderate({ userId: gate.userId, channel: "image_in", text: composed });
+  // 빌드된 프롬프트는 이미 1차 검사된 입력에서 파생 → heuristic(미성년/불법 결정론 필터)만 재검사.
+  // LLM 분류기 호출을 생략해 이미지 경로 지연(함수 60초 예산)을 줄인다.
+  const builtMod = await moderate({ userId: gate.userId, channel: "image_in", text: composed, heuristicOnly: true });
   if (!builtMod.pass)
     return NextResponse.json({ error: "blocked", category: builtMod.category ?? "minor" }, { status: 422 });
 

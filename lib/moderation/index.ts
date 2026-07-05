@@ -18,16 +18,21 @@ interface ModerateArgs {
   channel: Channel;
   text?: string; // 텍스트/프롬프트
   imageUrl?: string; // 출력 이미지 스크리닝용
+  heuristicOnly?: boolean; // 결정론적 heuristic만(LLM 분류기 생략) — 이미 1차 검사된 파생 텍스트 재검사용(지연 절감)
 }
 
 // 외부 텍스트 분류 API. 미설정 시 휴리스틱만으로 동작(fail-safe: 미설정이라고 통과시키지 않음).
-async function classifyText(text: string): Promise<ModerationResult> {
+async function classifyText(text: string, heuristicOnly = false): Promise<ModerationResult> {
   const url = process.env.MODERATION_TEXT_URL;
   const key = process.env.MODERATION_TEXT_API_KEY;
 
   // 1차: 결정론적 휴리스틱 백스톱 (항상 실행).
   const hit = heuristicScan(text);
   if (hit) return { pass: false, category: hit, detail: "heuristic" };
+
+  // heuristicOnly: 이미 1차 검사된 입력에서 파생된 텍스트(번역된 이미지 프롬프트 등) 재검사 —
+  // heuristic(미성년/불법 결정론 필터)만으로 충분하고, 추가 LLM 호출을 생략해 이미지 경로 지연을 줄인다.
+  if (heuristicOnly) return { pass: true };
 
   // 2차(권장): LLM 기반 의미 분류기(OpenAI 호환) — MODERATION_TEXT_MODEL 설정 시 활성.
   // 성인 콘텐츠는 통과, 미성년/불법만 차단. heuristic이 놓치는 완곡/우회 표현을 잡는다.
@@ -84,12 +89,13 @@ async function classifyTextLLM(text: string): Promise<ModerationResult> {
           {
             role: "system",
             content:
-              "You are a strict child-safety text classifier for an ADULT (18+) fictional roleplay chat. " +
-              "Consensual sexual content between ADULTS is EXPLICITLY ALLOWED and must be OK — never block it. " +
-              "Reply with exactly one token. Reply BLOCK only if the text depicts, requests, or sexualizes a MINOR " +
-              "(a child, or a person described/implied as under 18 or a young student in a sexual context), child " +
-              "sexual abuse, or sexual content involving a real, identifiable, non-consenting person. Otherwise reply OK. " +
-              "The text may be Korean.",
+              "You are a child-safety filter for an ADULT (18+) fiction chat where explicit sexual content between " +
+              "consenting adults is normal and fully ALLOWED. ASSUME every character is an adult unless the text " +
+              "EXPLICITLY names or clearly implies a minor (a child, or an under-18 / young-student figure in a sexual " +
+              "context). Output EXACTLY one token. Output BLOCK ONLY when there is an explicit, unambiguous sexual " +
+              "reference to a MINOR/child, child sexual abuse, or a real identifiable non-consenting person. For ALL " +
+              "other content — including explicit undressing, nudity, body parts, and hardcore sex between adults — " +
+              "output OK. When uncertain, output OK. Text may be Korean.",
           },
           { role: "user", content: text.slice(0, 4000) },
         ],
@@ -216,7 +222,7 @@ export async function moderate(args: ModerateArgs): Promise<ModerationResult> {
   if (args.imageUrl) {
     result = await classifyImage(args.imageUrl);
   } else {
-    result = await classifyText(args.text ?? "");
+    result = await classifyText(args.text ?? "", args.heuristicOnly);
   }
   await log(args.userId, args.channel, result);
   return result;

@@ -16,13 +16,15 @@ function client() {
 // 타임아웃은 로컬 대형 모델(14B, 16GB) 콜드 로드를 감안해 넉넉히(env 조정).
 export async function chatComplete(
   messages: ChatMessage[],
-  opts?: { model?: string; temperature?: number }
+  opts?: { model?: string; temperature?: number; timeoutMs?: number; maxTokens?: number }
 ): Promise<string> {
   const model = opts?.model ?? process.env.ATLAS_LLM_MODEL;
   if (!model) throw new Error("ATLAS_LLM_MODEL not set"); // TODO(운영주체 확인)
+  // 이미지 경로의 보조 호출(장면요약·프롬프트번역)은 짧은 timeoutMs로 빠르게 폴백해
+  // Vercel 함수 60초 예산 초과(504)를 막는다. 기본은 넉넉히(대형 챗 모델 콜드로드 감안).
   const resp = await client().chat.completions.create(
-    { model, messages, temperature: opts?.temperature ?? 0.8, max_tokens: 800 },
-    { timeout: Number(process.env.ATLAS_LLM_TIMEOUT_MS ?? 180_000) }
+    { model, messages, temperature: opts?.temperature ?? 0.8, max_tokens: opts?.maxTokens ?? 800 },
+    { timeout: opts?.timeoutMs ?? Number(process.env.ATLAS_LLM_TIMEOUT_MS ?? 180_000) }
   );
   const content = resp.choices?.[0]?.message?.content;
   if (!content) throw new Error("empty LLM response");
